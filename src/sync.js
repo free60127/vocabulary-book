@@ -56,7 +56,7 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
     // 老用户的码在云端"不存在"了，但本机数据完好、每台设备用的是同一串码 ——
     // 结果两台设备都推不上去也拉不下来。现在当成"空云端"继续走，第一台推送的设备把它建起来。
     if (e && e.status === 404) {
-      remote = { version: 0, updatedAt: 0, data: { books: [], history: [], deletedBooks: [], deletedEntries: [], days: [], review: {} } };
+      remote = { version: 0, updatedAt: 0, data: { books: [], history: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [], days: [], review: {} } };
       recovered = true;
     } else {
       return { ok: false, error: e.message || '读取云端失败' };
@@ -79,9 +79,11 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
         review: payload.review || {},
         days: payload.days || [],
         history: payload.history || [],
+        favorites: payload.favorites || [],
         // 墓碑也要推上去：其它设备才知道"这些已经删了"，否则它们本机的旧副本会把它并回来
         deletedBooks: payload.deletedBooks || [],
         deletedEntries: payload.deletedEntries || [],
+        deletedFavorites: payload.deletedFavorites || [],
       },
     });
     if (r.ok) {
@@ -101,7 +103,11 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
       baseVersion = Number(r.data.version) || 0;
       recovered = false;
       payload = mergeSnapshot(
-        { books: payload.books, review: payload.review, days: payload.days, history: payload.history, deletedBooks: payload.deletedBooks, deletedEntries: payload.deletedEntries },
+        {
+          books: payload.books, review: payload.review, days: payload.days, history: payload.history,
+          favorites: payload.favorites,
+          deletedBooks: payload.deletedBooks, deletedEntries: payload.deletedEntries, deletedFavorites: payload.deletedFavorites,
+        },
         r.data.data,
       );
       continue;

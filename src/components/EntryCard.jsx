@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, FileDown, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
+import { ArrowRight, Check, FileDown, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { speak } from '../speak.js';
 
@@ -71,7 +71,8 @@ function DictSection({ dict }) {
  * 排序有讲究：**先给结论（释义/词性/色彩），再给用法（场景/搭配），最后才是对比与例句**。
  * 学习者是先想知道"这词什么意思、能不能用"，再关心"和近义词差在哪"。
  */
-export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen' }) {
+export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen',
+  onToggleFavorite, isFavorite, onLookupWord }) {
   const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
   const saved = Boolean(existing);
   // 打印/导出 PDF 时去掉一切交互件：朗读按钮、保存栏在纸上毫无意义，只会占地方。
@@ -150,6 +151,22 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
                 {s.register ? <span className="syn-meta">{s.register}</span> : null}
                 {s.tone ? <span className="syn-meta">{s.tone}</span> : null}
                 {s.strength ? <span className="syn-meta">{s.strength}</span> : null}
+                {/* 收藏 / 查它：近义词是"看到一个新词"的高频入口，
+                    以前只能眼睛记下来、回头再去搜索框敲一遍 —— 这两个按钮把这条路缩短成一次点击 */}
+                {forPrint ? null : (
+                  <span className="syn-acts">
+                    <button className={'icon-btn' + (isFavorite && isFavorite(s.word) ? ' on' : '')}
+                      title={isFavorite && isFavorite(s.word) ? '已在收藏夹里（点一下取消）' : '收藏这个词，回头细看'}
+                      aria-label="收藏" aria-pressed={Boolean(isFavorite && isFavorite(s.word))}
+                      onClick={() => onToggleFavorite && onToggleFavorite(s, entry)}>
+                      <Star size={14} fill={isFavorite && isFavorite(s.word) ? 'currentColor' : 'none'} />
+                    </button>
+                    <button className="icon-btn" title={'直接查 ' + s.word + ' 的详细讲解'}
+                      aria-label="查这个词" onClick={() => onLookupWord && onLookupWord(s.word)}>
+                      <ArrowRight size={14} />
+                    </button>
+                  </span>
+                )}
               </div>
               {s.cn ? <div className="syn-meaning">{s.cn}</div> : null}
               {s.diff ? <div className="syn-usage"><b>差别</b>：{s.diff}</div> : null}

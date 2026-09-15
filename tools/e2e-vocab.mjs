@@ -213,6 +213,83 @@ try {
     ok('点老历史自动补查，仍然落到查完的界面', (await page.locator('.entry-card').count()) === 1);
   }
 
+  /* ---------- ①d 近义词上的 ⭐ 收藏 与 → 查它 ---------- */
+  {
+    // → 直接查这个词：应该自动发起一次查询并渲染出它的卡片
+    await page.locator('.syn-acts .icon-btn[aria-label="查这个词"]').first().click();
+    await page.waitForFunction(() => /oppose/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
+    ok('点 → 自动查这个词并显示详细词解', /oppose/i.test(await page.locator('.entry-card h1').innerText()), await page.locator('.entry-card h1').innerText());
+
+    // 回到 object 再收藏它的近义词
+    await page.fill('.search-input', 'object');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /object/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
+    const star = page.locator('.syn-acts .icon-btn[aria-label="收藏"]').first();
+    ok('收藏前是未选中状态', (await star.getAttribute('aria-pressed')) === 'false', String(await star.getAttribute('aria-pressed')));
+    await star.click();
+    await page.waitForTimeout(300);
+    const favAfter = await page.evaluate(() => ({
+      stored: JSON.parse(localStorage.getItem('vb-favorites') || '[]'),
+      pressed: document.querySelector('.syn-acts .icon-btn[aria-label="收藏"]')?.getAttribute('aria-pressed'),
+    }));
+    ok('点 ⭐ 收藏进收藏夹（本机落盘）', favAfter.stored.length === 1 && favAfter.stored[0].head === 'oppose', JSON.stringify(favAfter.stored.map((f) => f.head)));
+    ok('收藏后按钮变成已选中', favAfter.pressed === 'true', String(favAfter.pressed));
+    ok('收藏项带上了来源词条（回头知道是在看哪个词时收的）', favAfter.stored[0].from === 'object', favAfter.stored[0].from);
+
+    // 侧栏出现收藏夹区块，点一下能回到那个词
+    const favItems = await page.locator('.lesson-list').first().locator('.lesson-item').count();
+    ok('侧栏出现收藏夹区块', favItems >= 1, String(favItems));
+    const sideTitle = await page.locator('.fav-side-title').innerText();
+    ok('侧栏收藏夹显示数量', /收藏夹（1）/.test(sideTitle), sideTitle.replace(/\s+/g, ' '));
+
+    // 管理弹窗：查后加入词库
+    await page.locator('.fav-side-title button:has-text("管理")').click();
+    await page.waitForSelector('.favorites-modal', { timeout: 8000 });
+    const favModal = await page.evaluate(() => ({
+      count: document.querySelectorAll('.favorites-modal .fav-row').length,
+      head: document.querySelector('.favorites-modal .fav-row-head strong')?.textContent,
+      state: document.querySelector('.favorites-modal .fav-row-note')?.textContent || '',
+      // ⚠️ `:has-text()` 是 Playwright 的写法，在 page.evaluate 里的 querySelector 上不合法
+      buttons: [...document.querySelectorAll('.favorites-modal button')].map((b) => b.textContent.trim()),
+    }));
+    ok('收藏夹弹窗列出收藏项', favModal.count === 1 && favModal.head === 'oppose', `${favModal.count} 条 · ${favModal.head}`);
+    ok('未查过的标出「还没查过」', /还没查过/.test(favModal.state), favModal.state.slice(0, 40));
+    ok('未查过的给的是「查详细讲解」+「查后加入」（而不是直接加入词库）',
+      favModal.buttons.some((b) => b.includes('查详细讲解')) && favModal.buttons.some((b) => b.includes('查后加入')), favModal.buttons.join(' / '));
+    await page.locator('.favorites-modal button:has-text("查后加入")').click();
+    await page.waitForFunction(() => /oppose/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
+    await page.waitForTimeout(600);
+    const afterAdd = await page.evaluate(() => ({
+      books: JSON.parse(localStorage.getItem('vb-books') || '[]'),
+      fav: JSON.parse(localStorage.getItem('vb-favorites') || '[]'),
+    }));
+    const allHeads = afterAdd.books.flatMap((b) => b.entries.map((e) => e.head));
+    ok('「查后加入」一次点击完成查词 + 存入词库', allHeads.includes('oppose'), allHeads.join(','));
+    ok('查完后收藏项挂上了完整词条（下次可一步加入）', Boolean(afterAdd.fav[0].entry), Object.keys(afterAdd.fav[0]).join(','));
+
+    // 取消收藏 + 墓碑
+    await page.locator('.syn-acts .icon-btn[aria-label="收藏"]').first().click();
+    await page.waitForTimeout(300);
+    const unfav = await page.evaluate(() => ({
+      fav: JSON.parse(localStorage.getItem('vb-favorites') || '[]'),
+      tomb: JSON.parse(localStorage.getItem('vb-deleted-favorites') || '[]'),
+    }));
+    ok('再点一次取消收藏', unfav.fav.length === 0, `${unfav.fav.length} 条`);
+    ok('取消收藏留墓碑（否则同步时会被云端旧副本复活）', unfav.tomb.length === 1, JSON.stringify(unfav.tomb));
+
+    // 清理：把 oppose 从本子里删掉，免得影响后面的断言
+    await page.evaluate(() => {
+      const books = JSON.parse(localStorage.getItem('vb-books') || '[]');
+      books.forEach((b) => { b.entries = b.entries.filter((e) => e.head !== 'oppose'); });
+      localStorage.setItem('vb-books', JSON.stringify(books));
+      localStorage.setItem('vb-favorites', '[]');
+      localStorage.setItem('vb-deleted-favorites', '[]');
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.side-toggle', { timeout: 30000 });
+    ok('收藏夹相关状态清理完成', (await page.evaluate(() => JSON.parse(localStorage.getItem('vb-favorites') || '[]').length)) === 0);
+  }
+
   /* ---------- ② 单词本：列表 / 筛选 / 排序 ---------- */
   await page.locator('.lesson-item').first().click();
   await page.waitForSelector('.entry-row', { timeout: 8000 });

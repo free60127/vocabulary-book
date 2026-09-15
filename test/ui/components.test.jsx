@@ -13,6 +13,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import QuizPane from '../../src/components/QuizPane.jsx';
 import EntryCard from '../../src/components/EntryCard.jsx';
 import PrintSheet from '../../src/components/PrintSheet.jsx';
+import FavoritesModal from '../../src/components/modals/FavoritesModal.jsx';
 
 const QUIZ = {
   title: '单词本自测 · 2 题',
@@ -197,5 +198,87 @@ describe('PrintSheet 打印页', () => {
   it('没有任务时什么都不渲染', () => {
     const { container } = render(<PrintSheet job={null} />);
     expect(container.querySelector('.print-sheet')).toBeNull();
+  });
+});
+
+/* ---------- 近义词行上的收藏 / 查它 ---------- */
+describe('近义词操作', () => {
+  const SYN_ENTRY = { ...ENTRY, synonyms: [{ word: 'oppose', phonetic: '/əˈpəʊz/', cn: '反对', register: '正式', tone: '中性', strength: '强', diff: 'oppose 更正式' }] };
+
+  it('每个近义词都有「收藏」和「查这个词」两个按钮', () => {
+    render(<EntryCard entry={SYN_ENTRY} onToggleFavorite={noop} isFavorite={() => false} onLookupWord={noop} />);
+    expect(document.querySelector('.syn-acts .icon-btn[aria-label="收藏"]')).toBeTruthy();
+    expect(document.querySelector('.syn-acts .icon-btn[aria-label="查这个词"]')).toBeTruthy();
+  });
+
+  it('点 ⭐ 把整行信息交给回调（不只是词名）', () => {
+    const onToggleFavorite = vi.fn();
+    render(<EntryCard entry={SYN_ENTRY} onToggleFavorite={onToggleFavorite} isFavorite={() => false} onLookupWord={noop} />);
+    fireEvent.click(document.querySelector('.syn-acts .icon-btn[aria-label="收藏"]'));
+    const [syn, entry] = onToggleFavorite.mock.calls[0];
+    expect(syn.word).toBe('oppose');
+    expect(syn.register).toBe('正式');
+    expect(entry.head).toBe('object');   // 第二个参数是来源词条，收藏时要记下来
+  });
+
+  it('点 → 把词名交给查词回调', () => {
+    const onLookupWord = vi.fn();
+    render(<EntryCard entry={SYN_ENTRY} onToggleFavorite={noop} isFavorite={() => false} onLookupWord={onLookupWord} />);
+    fireEvent.click(document.querySelector('.syn-acts .icon-btn[aria-label="查这个词"]'));
+    expect(onLookupWord).toHaveBeenCalledWith('oppose');
+  });
+
+  it('已收藏时星标是按下状态（视觉上实心）', () => {
+    render(<EntryCard entry={SYN_ENTRY} onToggleFavorite={noop} isFavorite={(w) => w === 'oppose'} onLookupWord={noop} />);
+    expect(document.querySelector('.syn-acts .icon-btn[aria-label="收藏"]').getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.syn-acts .icon-btn.on')).toBeTruthy();
+  });
+
+  it('打印变体里不出现这两个按钮（纸上点不了）', () => {
+    render(<EntryCard entry={SYN_ENTRY} variant="print" />);
+    expect(document.querySelector('.syn-acts')).toBeNull();
+  });
+});
+
+describe('FavoritesModal 收藏夹', () => {
+  const FAV = [
+    { id: 'fav-oppose', head: 'oppose', phonetic: '/əˈpəʊz/', brief: '反对', from: 'object', at: 2 },
+    { id: 'fav-consecrate', head: 'consecrate', brief: '祝圣', from: 'enshrine', at: 1, entry: { id: 'wb-c', head: 'consecrate' } },
+  ];
+  const BOOKS = [{ id: 'b1', name: '我的本', entries: [] }];
+
+  it('列出收藏项，并区分「还没查过 / 已查到完整讲解」', () => {
+    render(<FavoritesModal favorites={FAV} books={BOOKS} busy={false} onClose={noop} onRemove={noop} onAddToBook={noop} onLookup={noop} />);
+    const notes = [...document.querySelectorAll('.fav-row-note')].map((n) => n.textContent);
+    expect(notes.length).toBe(2);
+    expect(notes.some((t) => t.includes('还没查过'))).toBe(true);
+    expect(notes.some((t) => t.includes('已查到完整讲解'))).toBe(true);
+  });
+
+  it('没查过的给「查详细讲解」，查过的才给「加入词库」', () => {
+    render(<FavoritesModal favorites={FAV} books={BOOKS} busy={false} onClose={noop} onRemove={noop} onAddToBook={noop} onLookup={noop} />);
+    const rows = [...document.querySelectorAll('.fav-row')].map((r) => r.textContent);
+    expect(rows[0]).toContain('查详细讲解');
+    expect(rows[0]).toContain('查后加入');
+    expect(rows[1]).toContain('加入词库');
+    expect(rows[1]).not.toContain('查详细讲解');
+  });
+
+  it('加入词库时带上选中的本子 id', () => {
+    const onAddToBook = vi.fn();
+    render(<FavoritesModal favorites={FAV} books={BOOKS} busy={false} onClose={noop} onRemove={noop} onAddToBook={onAddToBook} onLookup={noop} />);
+    fireEvent.click(screen.getAllByText('加入词库')[0]);
+    expect(onAddToBook).toHaveBeenCalledWith(FAV[1], 'b1');
+  });
+
+  it('空收藏夹给出说明而不是空白', () => {
+    render(<FavoritesModal favorites={[]} books={BOOKS} busy={false} onClose={noop} onRemove={noop} onAddToBook={noop} onLookup={noop} />);
+    expect(document.body.textContent).toContain('收藏夹是空的');
+  });
+
+  it('没有单词本时「加入词库」按钮禁用并说明原因', () => {
+    render(<FavoritesModal favorites={FAV} books={[]} busy={false} onClose={noop} onRemove={noop} onAddToBook={noop} onLookup={noop} />);
+    expect(document.body.textContent).toContain('还没有单词本');
+    expect(screen.getAllByText('查后加入')[0].disabled).toBe(true);
   });
 });

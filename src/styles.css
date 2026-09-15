@@ -1010,3 +1010,30 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
   /* 朗读/保存这类交互件在纸上毫无意义 */
   .print-sheet .icon-btn, .print-sheet .save-bar, .print-sheet .result-toolbar { display: none !important; }
 }
+
+/* ---------- 近义词行上的「收藏 / 查它」----------
+   放在行尾、和词性徽章同一行；靠 margin-left:auto 推到最右边，
+   这样一眼看过去是一列整齐的操作区，而不是夹在词性和徽章中间。 */
+.syn-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.syn-acts .icon-btn { width: 30px; height: 30px; }
+.syn-acts .icon-btn.on { color: var(--gold); }
+.syn-acts .icon-btn.on:hover { color: var(--gold); background: #fff8e6; border-color: #f0dca8; }
+.syn-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- 收藏夹 ---------- */
+.fav-side-title { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.fav-side-title .ghost-btn { padding: 2px 8px; min-height: 0; font-size: 11px; }
+.fav-side-star { color: var(--gold); flex: none; }
+.favorites-modal { width: 620px; max-width: calc(100vw - 32px); }
+.fav-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+.fav-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; }
+.fav-row-main { flex: 1; min-width: 0; }
+.fav-row-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.fav-row-head strong { font-size: 15px; }
+.fav-row-acts { display: flex; align-items: center; gap: 4px; flex: none; }
+
+@media (max-width: 720px) {
+  /* 手机端：一行放不下三个按钮 —— 让操作区换到下一行，别把词挤没 */
+  .fav-row { flex-direction: column; align-items: stretch; }
+  .fav-row-acts { justify-content: flex-end; flex-wrap: wrap; }
+}

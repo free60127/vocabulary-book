@@ -6,6 +6,7 @@
  * 一抛就是整页白屏，且没有降级路径。（回译本上实测过。）
  */
 import { mergeBooks, sanitizeBook, sanitizeEntry } from './wordbook.js';
+import { mergeFavorites } from './favorites.js';
 import { mergeDays, mergeSchedules } from './review.js';
 
 export const BOOKS_KEY = 'vb-books';
@@ -15,6 +16,9 @@ export const HISTORY_KEY = 'vb-history';
 export const DELETED_BOOKS_KEY = 'vb-deleted-books';
 export const DELETED_ENTRIES_KEY = 'vb-deleted-entries';
 export const SETTINGS_KEY = 'vb-settings';
+/** 收藏夹（近义词行上点 ⭐ 攒下来的"待细看"的词） */
+export const FAVORITES_KEY = 'vb-favorites';
+export const DELETED_FAVORITES_KEY = 'vb-deleted-favorites';
 /** 侧栏开合（只在桌面端记住；手机端每次进来都收起，见 App.jsx 的说明） */
 export const SIDE_STATE_KEY = 'vb-sidebar';
 export const LEVEL_KEY = 'vb-level';
@@ -62,6 +66,11 @@ export const saveDays = (days) => safeSet(DAYS_KEY, JSON.stringify((Array.isArra
  * 云同步快照回来 —— 两个来源都不可信。卡片渲染会对 meanings/examples 直接 .map，
  * 一份被改过的备份就能让页面白屏（这正是 sanitizeEntry 存在的理由）。
  */
+export const loadFavorites = () => parseArray(safeGet(FAVORITES_KEY, '[]')).filter((f) => f && typeof f === 'object');
+export const saveFavorites = (list) => safeSet(FAVORITES_KEY, JSON.stringify((Array.isArray(list) ? list : []).slice(0, 500)));
+export const loadDeletedFavorites = () => parseArray(safeGet(DELETED_FAVORITES_KEY, '[]')).filter((x) => typeof x === 'string' && x);
+export const saveDeletedFavorites = (list) => safeSet(DELETED_FAVORITES_KEY, JSON.stringify((Array.isArray(list) ? list : []).slice(-2000)));
+
 export const loadHistory = () => parseArray(safeGet(HISTORY_KEY, '[]'))
   .filter((h) => h && typeof h === 'object' && h.id)
   .map((h) => {
@@ -148,14 +157,16 @@ export const loadSettings = () => parseObject(safeGet(SETTINGS_KEY, '{}'));
 export const saveSettings = (s) => safeSet(SETTINGS_KEY, JSON.stringify(s || {}));
 
 /* ---------- 快照：云同步与备份共用 ---------- */
-export function localSnapshot({ books, schedule, days, history, deletedBooks, deletedEntries }) {
+export function localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites }) {
   return {
     books: Array.isArray(books) ? books : [],
     review: schedule && typeof schedule === 'object' ? schedule : {},
     days: Array.isArray(days) ? days : [],
     history: Array.isArray(history) ? history : [],
+    favorites: Array.isArray(favorites) ? favorites : [],
     deletedBooks: Array.isArray(deletedBooks) ? deletedBooks : [],
     deletedEntries: Array.isArray(deletedEntries) ? deletedEntries : [],
+    deletedFavorites: Array.isArray(deletedFavorites) ? deletedFavorites : [],
   };
 }
 
@@ -196,14 +207,20 @@ export function mergeHistory(local, remote, limit = HISTORY_LIMIT) {
 export function mergeSnapshot(local, remote) {
   const deletedBooks = unionTombstones(local.deletedBooks, remote && remote.deletedBooks, 200);
   const deletedEntries = unionTombstones(local.deletedEntries, remote && remote.deletedEntries, 5000);
+  const deletedFavorites = unionTombstones(local.deletedFavorites, remote && remote.deletedFavorites, 2000);
   const { list: books, booksAdded, entriesAdded } = mergeBooks(local.books, remote && remote.books, deletedBooks, deletedEntries);
+  // 收藏夹同样要过墓碑：不然"删掉的收藏"会在下一次同步里被云端旧副本复活
+  const dead = new Set(deletedFavorites);
+  const favorites = mergeFavorites(local.favorites, remote && remote.favorites).filter((f) => !dead.has(f.id));
   return {
     books,
     review: mergeSchedules(local.review, remote && remote.review),
     days: mergeDays(local.days, remote && remote.days),
     history: mergeHistory(local.history, remote && remote.history),
+    favorites,
     deletedBooks,
     deletedEntries,
-    added: { booksAdded, entriesAdded },
+    deletedFavorites,
+    added: { booksAdded, entriesAdded, favoritesAdded: favorites.length },
   };
 }

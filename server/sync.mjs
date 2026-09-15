@@ -28,8 +28,10 @@ export const SNAPSHOT_LIMITS = Object.freeze({
   books: 100,               // 单词本数量
   entriesPerBook: 5000,     // 每个本子的词条上限
   history: 60,              // 最近查询记录（每条带一份词条快照，所以条数收紧）
+  favorites: 500,           // 收藏夹（近义词行上点 ⭐ 攒的词）
   deletedBooks: 200,        // 已删除的单词本 id（墓碑）
   deletedEntries: 5000,     // 已删除的词条（bookId|entryId）
+  deletedFavorites: 2000,   // 已删除的收藏项
   days: 400,                // 学习日期（连续天数）：YYYY-MM-DD 去重列表
   review: 5000,             // 复习排期表：entryId → {ease,interval,due,reps,lapses}
   bookIdChars: 64,
@@ -41,13 +43,14 @@ export const SNAPSHOT_LIMITS = Object.freeze({
   synonymsPerEntry: 20,
   entryBytes: 40000,        // 单条词条的 JSON 体积
   historyBytes: 16000,      // 单条历史的上限：放不下快照就只存摘要
+  favoriteBytes: 40000,     // 单条收藏：查过之后会挂上完整词条，上限与词条一致
 });
 
 export const newSyncCode = () => randomBytes(16).toString('hex');
 export const isValidSyncCode = (code) => CODE_RE.test(String(code || ''));
 
 export const emptySnapshot = () => ({
-  books: [], history: [], deletedBooks: [], deletedEntries: [], days: [], review: {},
+  books: [], history: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [], days: [], review: {},
 });
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -123,6 +126,29 @@ export function sanitizeSnapshot(raw) {
     })
     .slice(0, L.history);
 
+  /* ---------- 收藏夹 ----------
+   * 与历史同理：挂着完整词条（查过之后），所以照样逐条过 sanitizeEntry，
+   * 不合法就退化成"只有词头"的收藏项 —— 至少还能点它去查。 */
+  const favorites = (Array.isArray(raw.favorites) ? raw.favorites : [])
+    .filter((f) => isPlainObject(f) && typeof f.head === 'string' && f.head.trim())
+    .map((f) => {
+      const base = {
+        id: boundedString(f.id, L.entryIdChars) || ('fav-' + boundedString(f.head, L.headChars).trim().toLowerCase().replace(/\s+/g, '-').slice(0, 50)),
+        head: boundedString(f.head, L.headChars).trim(),
+        brief: boundedString(f.brief, 600),
+        phonetic: boundedString(f.phonetic, 120),
+        register: boundedString(f.register, 60),
+        tone: boundedString(f.tone, 60),
+        strength: boundedString(f.strength, 60),
+        from: boundedString(f.from, L.headChars),
+        at: Number(f.at) || 0,
+      };
+      const entry = isPlainObject(f.entry) ? sanitizeEntry(f.entry) : null;
+      const full = entry ? { ...base, entry } : base;
+      return jsonBytes(full) <= L.favoriteBytes ? full : base;
+    })
+    .slice(0, L.favorites);
+
   /* ---------- 墓碑：只留字符串形状合法的去重值 ---------- */
   const collect = (arr, maxLen) => {
     const set = new Set();
@@ -136,6 +162,7 @@ export function sanitizeSnapshot(raw) {
   const deletedBooks = collect(raw.deletedBooks, L.bookIdChars);
   // 词条键 = bookId + '|' + entryId，两个 id 各 ≤64，留点余量
   const deletedEntries = collect(raw.deletedEntries, L.bookIdChars * 2 + 2);
+  const deletedFavorites = collect(raw.deletedFavorites, L.entryIdChars);
 
   /* ---------- 学习日期 ---------- */
   const daySet = new Set();
@@ -163,7 +190,7 @@ export function sanitizeSnapshot(raw) {
     };
   }
 
-  const data = { books, history, deletedBooks, deletedEntries, days, review };
+  const data = { books, history, favorites, deletedBooks, deletedEntries, deletedFavorites, days, review };
   if (jsonBytes(data) > MAX_SNAPSHOT_BYTES) {
     return { ok: false, error: `同步数据过大（上限 ${Math.round(MAX_SNAPSHOT_BYTES / 1024 / 1024)}MB）` };
   }

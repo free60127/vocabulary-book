@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookMarked, ChevronRight, Cloud, FileDown, Flame, FolderPlus, LoaderCircle, LogIn,
-  PanelLeftClose, PanelLeftOpen, Search, Settings, Sparkles, Trash2, Volume2, X,
+  PanelLeftClose, PanelLeftOpen, Search, Settings, Sparkles, Star, Trash2, Volume2, X,
 } from 'lucide-react'
 import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, pullCloudSync, pushCloudSync } from './api.js'
 import {
@@ -12,7 +12,8 @@ import { submitAndPoll } from './hooks/pollJob.js'
 import {
   SIDE_STATE_KEY,
   LEVEL_KEY, loadBooks, loadDays, loadDeletedBooks, loadDeletedEntries, loadHistory,
-  loadSchedule, loadSettings, localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory, safeGet,
+  loadDeletedFavorites, loadFavorites, loadSchedule, loadSettings, localSnapshot, makeHistoryItem,
+  mergeSnapshot, pushHistory, safeGet, saveDeletedFavorites, saveFavorites,
   safeSet, saveBooks, saveDays, saveDeletedBooks, saveDeletedEntries, saveHistory,
   saveSchedule, saveSettings,
 } from './storage.js'
@@ -23,6 +24,7 @@ import {
 import { GRADE_KEYS, GRADES, addStudyDay, dueEntries, gradeHint, scheduleOf, sm2Review, summarizeStreak } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
 import { speak } from './speak.js'
+import { addFavorite, attachEntryToFavorite, findFavorite, removeFavorite } from './favorites.js'
 import { deviceId, loadSyncCode, loadSyncMeta, newSyncCode, saveSyncCode, saveSyncMeta, syncOnce } from './sync.js'
 import {
   authConfig, bindSyncCode, changePassword as apiChangePassword, deleteAccount as apiDelete,
@@ -34,6 +36,7 @@ import PrintSheet from './components/PrintSheet.jsx'
 import QuizPane from './components/QuizPane.jsx'
 import BackupModal from './components/modals/BackupModal.jsx'
 import AuthModal from './components/modals/AuthModal.jsx'
+import FavoritesModal from './components/modals/FavoritesModal.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -44,6 +47,9 @@ export default function App() {
   const [schedule, setSchedule] = useState(loadSchedule)
   const [days, setDays] = useState(loadDays)
   const [history, setHistory] = useState(loadHistory)
+  const [favorites, setFavorites] = useState(loadFavorites)
+  const [deletedFavorites, setDeletedFavorites] = useState(loadDeletedFavorites)
+  const [favOpen, setFavOpen] = useState(false)
   const [deletedBooks, setDeletedBooks] = useState(loadDeletedBooks)
   const [deletedEntries, setDeletedEntries] = useState(loadDeletedEntries)
   const [settings, setSettings] = useState(loadSettings)
@@ -145,6 +151,7 @@ export default function App() {
   /* ---------- 派生 ---------- */
   const persistBooks = useCallback((next) => { setBooks(next); saveBooks(next) }, [])
   const persistSchedule = useCallback((next) => { setSchedule(next); saveSchedule(next) }, [])
+  const persistFavorites = useCallback((next) => { setFavorites(next); saveFavorites(next) }, [])
   const markStudied = useCallback(() => setDays((d) => { const n = addStudyDay(d); saveDays(n); return n }), [])
   const entries = useMemo(() => allEntries(books), [books])
   const stats = useMemo(() => summarizeBooks(books), [books])
@@ -156,12 +163,12 @@ export default function App() {
   // 用户点查询却收到一句让他去改服务端 .env 的报错 —— 那是给站长看的，不是给他看的。
   const hasKey = Boolean(settings.apiKey || (status?.hasKey && status?.serverKeyAllowed !== false))
   const local = useMemo(
-    () => localSnapshot({ books, schedule, days, history, deletedBooks, deletedEntries }),
-    [books, schedule, days, history, deletedBooks, deletedEntries],
+    () => localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites }),
+    [books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites],
   )
 
   /* ---------- 查词（核心链路：提交 → 轮询 → 卡片） ---------- */
-  const runLookup = async (term) => {
+  const runLookup = async (term, { saveToBookId } = {}) => {
     const q = String(term || '').trim()
     if (!q) { setError('请先输入要查的单词或短语'); return }
     setError(''); setBusy(true); setEntry(null); setProgress('正在提交…')
@@ -184,6 +191,21 @@ export default function App() {
       // 连词条快照一起存：点历史要能**直接回到这张卡片**，而不是把词填回搜索框再查一次
       const nextHistory = pushHistory(history, makeHistoryItem(e))
       setHistory(nextHistory); saveHistory(nextHistory)
+      // 这个词如果是从收藏夹点过来查的，把完整词条补进那条收藏（之后「加入词库」就能一步完成）
+      setFavorites((list) => {
+        const next = attachEntryToFavorite(list, e)
+        if (next !== list) saveFavorites(next)
+        return next
+      })
+      // 从收藏夹点「查后加入」：查完直接落进选中的本子，省掉"再点一次保存"
+      if (saveToBookId) {
+        const { list, replaced } = upsertEntry(books, saveToBookId, e)
+        persistBooks(list)
+        if (!replaced) persistSchedule({ ...schedule, [e.id]: scheduleOf(schedule, e.id, e.createdAt) })
+        const book = list.find((b) => b.id === saveToBookId)
+        flash('已加入「' + (book ? book.name : '') + '」：' + e.head, TIP_LONG_MS)
+        setActiveBookId(saveToBookId)
+      }
       markStudied()
     } catch (err) {
       setError(err.message || '查询失败'); setProgress('')
@@ -209,6 +231,70 @@ export default function App() {
     if (inBook) { setEntry(inBook); setError(''); return }
     if (h.entry) { setEntry(h.entry); setError(''); return }
     runLookup(h.head)
+  }
+
+  /* ---------- 收藏夹 ----------
+   * 收藏的是"待细看"的词：近义词行上点 ⭐ 就进来，回头点一下就有完整讲解。
+   * 删除留墓碑（与词条同一套机制），否则删掉的收藏会在下一次同步里被云端旧副本复活。 */
+  const isFavorite = useCallback((head) => Boolean(findFavorite(favorites, head)), [favorites])
+  const toggleFavorite = useCallback((syn, fromEntry) => {
+    const head = String((syn && syn.word) || '').trim()
+    if (!head) return
+    const existing = findFavorite(favorites, head)
+    if (existing) {
+      persistFavorites(removeFavorite(favorites, existing.id))
+      const tomb = [...deletedFavorites, existing.id]
+      setDeletedFavorites(tomb); saveDeletedFavorites(tomb)
+      flash('已取消收藏：' + head)
+      return
+    }
+    const next = addFavorite(favorites, {
+      head,
+      brief: (syn && syn.cn) || '',
+      phonetic: (syn && syn.phonetic) || '',
+      register: (syn && syn.register) || '',
+      tone: (syn && syn.tone) || '',
+      strength: (syn && syn.strength) || '',
+      from: (fromEntry && fromEntry.head) || '',
+    })
+    persistFavorites(next)
+    flash('已收藏「' + head + '」—— 在左侧收藏夹里可以点它查详细讲解，或直接加进单词本', TIP_LONG_MS)
+  }, [favorites, deletedFavorites, persistFavorites, flash])
+
+  /* 收藏夹里的词：查过就直接打开那张卡片，没查过就自动查一次。
+     写成普通函数而不是 useCallback —— 它依赖 runLookup，而 runLookup 每次渲染都是新的身份，
+     包成 useCallback 只会一路把依赖传染出去（和 openHistory 一样处理）。 */
+  const openFavorite = (fav) => {
+    if (!fav) return
+    setFavOpen(false)
+    closeSidebarOnMobile()
+    if (fav.entry) {
+      setEntry(fav.entry); setQuery(fav.head); setView('search'); setError('')
+      return
+    }
+    setQuery(fav.head)
+    runLookup(fav.head)
+  }
+
+  /**
+   * 把收藏夹里的词加进某个单词本。
+   * 没查过的话**先查再存**：本子里该放完整卡片，塞半成品只会把本子搞脏 ——
+   * 但也不该让用户自己去别处查一遍再回来，点一次就把两件事做完。
+   */
+  const addFavoriteToBook = async (fav, bookId) => {
+    if (!fav || !bookId) return
+    if (fav.entry) {
+      const { list, replaced } = upsertEntry(books, bookId, fav.entry)
+      persistBooks(list)
+      if (!replaced) persistSchedule({ ...schedule, [fav.entry.id]: scheduleOf(schedule, fav.entry.id, fav.entry.createdAt) })
+      const book = list.find((b) => b.id === bookId)
+      flash('已加入「' + (book ? book.name : '') + '」：' + fav.head, TIP_LONG_MS)
+      setActiveBookId(bookId)
+      return
+    }
+    setFavOpen(false)
+    setQuery(fav.head)
+    await runLookup(fav.head, { saveToBookId: bookId })
   }
 
   /* ---------- 存入 / 删除 ---------- */
@@ -346,19 +432,24 @@ export default function App() {
     persistBooks(merged.books); persistSchedule(merged.review)
     setDays(merged.days); saveDays(merged.days)
     setHistory(merged.history); saveHistory(merged.history)
+    persistFavorites(merged.favorites || [])
     setDeletedBooks(merged.deletedBooks); saveDeletedBooks(merged.deletedBooks)
     setDeletedEntries(merged.deletedEntries); saveDeletedEntries(merged.deletedEntries)
-    flash(`导入完成：新增 ${merged.added.booksAdded} 个单词本、${merged.added.entriesAdded} 个词条`, TIP_LONG_MS)
+    setDeletedFavorites(merged.deletedFavorites || []); saveDeletedFavorites(merged.deletedFavorites || [])
+    flash(`导入完成：新增 ${merged.added.booksAdded} 个单词本、${merged.added.entriesAdded} 个词条`
+      + (merged.favorites && merged.favorites.length ? `、收藏夹共 ${merged.favorites.length} 条` : ''), TIP_LONG_MS)
   }
 
   /* ---------- 云同步 ---------- */
   const applyMerged = useCallback((merged) => {
     persistBooks(merged.books); persistSchedule(merged.review)
+    persistFavorites(merged.favorites || [])
     setDays(merged.days); saveDays(merged.days)
     setHistory(merged.history); saveHistory(merged.history)
     setDeletedBooks(merged.deletedBooks); saveDeletedBooks(merged.deletedBooks)
     setDeletedEntries(merged.deletedEntries); saveDeletedEntries(merged.deletedEntries)
-  }, [persistBooks, persistSchedule])
+    setDeletedFavorites(merged.deletedFavorites || []); saveDeletedFavorites(merged.deletedFavorites || [])
+  }, [persistBooks, persistSchedule, persistFavorites])
 
   const localRef = useRef(local); localRef.current = local
   const syncBusyRef = useRef(false)
@@ -443,7 +534,9 @@ export default function App() {
         device: deviceId(),
         data: {
           books: snap.books || [], review: snap.review || {}, days: snap.days || [],
-          history: snap.history || [], deletedBooks: snap.deletedBooks || [], deletedEntries: snap.deletedEntries || [],
+          history: snap.history || [], favorites: snap.favorites || [],
+          deletedBooks: snap.deletedBooks || [], deletedEntries: snap.deletedEntries || [],
+          deletedFavorites: snap.deletedFavorites || [],
         },
       })
       if (!r.ok) { setSyncTip('覆盖失败：' + ((r.data && r.data.error) || ('HTTP ' + r.status))); return }
@@ -709,6 +802,25 @@ export default function App() {
             ))}
           </div>
 
+          {favorites.length > 0 && (
+            <>
+              <div className="side-title fav-side-title">
+                收藏夹（{favorites.length}）
+                <button className="ghost-btn sm" onClick={() => { closeSidebarOnMobile(); setFavOpen(true) }}>管理</button>
+              </div>
+              <div className="lesson-list" style={{ maxHeight: 150 }}>
+                {favorites.slice(0, 20).map((f) => (
+                  <button key={f.id} className="lesson-item" onClick={() => openFavorite(f)}
+                    title={f.entry ? '点一下看它的完整讲解' : '点一下自动查它'}>
+                    <Star size={12} className="fav-side-star" />
+                    <span className="lesson-title">{f.head}</span>
+                    {f.entry ? null : <span className="muted small">待查</span>}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
           {history.length > 0 && (
             <>
               <div className="side-title">最近查过</div>
@@ -856,6 +968,7 @@ export default function App() {
             {entry ? (
               <EntryCard entry={entry} books={books} existing={findEntryBook(books, entry.id)}
                 onExportPdf={(e) => setPrintJob({ kind: 'entry', entry: e })}
+                onToggleFavorite={toggleFavorite} isFavorite={isFavorite} onLookupWord={runLookup}
                 onSave={saveToBook} onCreateBook={createAndSave} />
             ) : null}
           </section>
@@ -911,6 +1024,20 @@ export default function App() {
         </div>
       ) : null}
     </div>
+
+      {favOpen ? (
+        <FavoritesModal
+          favorites={favorites} books={books} busy={busy}
+          onClose={() => setFavOpen(false)}
+          onLookup={(f) => { setFavOpen(false); openFavorite(f) }}
+          onRemove={(f) => {
+            persistFavorites(removeFavorite(favorites, f.id))
+            const tomb = [...deletedFavorites, f.id]
+            setDeletedFavorites(tomb); saveDeletedFavorites(tomb)
+            flash('已从收藏夹移除：' + f.head)
+          }}
+          onAddToBook={addFavoriteToBook} />
+      ) : null}
 
       {/* 打印页放在 .app 之外：body.printing 时把 .app 整个藏起来、只留它 */}
       <PrintSheet job={printJob} />

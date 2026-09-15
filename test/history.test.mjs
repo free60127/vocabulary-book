@@ -136,6 +136,19 @@ const bytes = (v) => JSON.stringify(v).length;
   check('墓碑会随快照一起推给云端', tombBook.deletedBooks.includes('bk-live') && tombEntry.deletedEntries.includes('bk-live|wb-live'));
 }
 
+/* ---------- 收藏夹也要能过同步（不然换设备就没了）---------- */
+{
+  const fav = { id: 'fav-enshrine', head: 'enshrine', brief: '奉为神圣', from: 'incumbent', at: 5 };
+  const withEntry = { ...fav, id: 'fav-consecrate', head: 'consecrate', entry: { id: 'wb-x', head: 'consecrate', meanings: [{ cn: '祝圣' }] } };
+  const snap = sanitizeSnapshot({ books: [], days: [], review: {}, history: [], favorites: [fav, withEntry, { brief: '没有词头' }, 'junk'] });
+  check('服务端收下收藏夹并过滤脏数据', snap.ok && snap.data.favorites.length === 2, String(snap.data && snap.data.favorites.length));
+  check('收藏项里的完整词条也过清洗（换设备后仍能直接加入词库）',
+    Boolean(snap.data.favorites.find((f) => f.head === 'consecrate').entry));
+  check('收藏墓碑一并保存', Array.isArray(snap.data.deletedFavorites));
+  const tomb = sanitizeSnapshot({ books: [], days: [], review: {}, deletedFavorites: ['fav-a', 'fav-a', 7, 'fav-b'] });
+  check('收藏墓碑去重且只留字符串', tomb.ok && tomb.data.deletedFavorites.join() === 'fav-a,fav-b', JSON.stringify(tomb.data.deletedFavorites));
+}
+
 /* ---------- 服务端快照：历史里的快照也要清洗 ---------- */
 {
   const snap = sanitizeSnapshot({
