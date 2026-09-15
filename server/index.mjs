@@ -27,6 +27,7 @@ import { sendMail } from './mailer.mjs';
 import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, emptySnapshot, sanitizeSnapshot } from './sync.mjs';
 import { staleMsFor } from './job-stale.mjs';
 import { createBudget, budgetMessage } from './budget.mjs';
+import { createJobEvictor } from './job-evict.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -230,6 +231,10 @@ const JOB_PREFIX = KV_PREFIX + 'job:';
 const JOB_TTL_DAYS = Number(process.env.JOB_TTL_DAYS || 30);
 const JOB_TTL_SEC = Math.max(60, Math.round(JOB_TTL_DAYS * 86400));
 const JOB_MAX_COUNT = Number(process.env.JOB_MAX_COUNT || 2000);
+/* 任务条数上限的**实际执行者**：以前 JOB_MAX_COUNT 只在 /api/status 里报了个数，
+   没有任何淘汰逻辑（键只靠 TTL 过期），等于把"上限 2000"写成了谎话 ——
+   而这个项目与回译本共用同一个 256MB 的 Upstash 库，谁塞满谁先遭殃。 */
+const jobEvictor = createJobEvictor({ kv, prefix: KV_PREFIX, max: JOB_MAX_COUNT, ttlSec: JOB_TTL_SEC });
 const jobs = new Map();
 const jobRenewedAt = new Map();
 const JOB_RENEW_MS = 24 * 60 * 60 * 1000;
@@ -240,6 +245,7 @@ function scheduleForget(jobId) {
 function saveJob(job) {
   jobs.set(job.jobId, job);
   scheduleForget(job.jobId);
+  jobEvictor.track(job.jobId);      // 记账 + 超上限时淘汰最旧的（内部吞异常，不影响查词）
   return Promise.resolve(kv.set(JOB_PREFIX + job.jobId, JSON.stringify(job), JOB_TTL_SEC)).catch(() => {});
 }
 function renewJobTtl(job) {
@@ -605,7 +611,10 @@ const server = http.createServer(async (req, res) => {
         levels: LEVEL_KEYS, defaultLevel: DEFAULT_LEVEL,
         sync: { store: syncStore.kind, durable: syncDurable, hosted: HOSTED },
         accounts: { enabled: accountsOn, durable: kvDurable },
-        jobs: { store: kv.kind, durable: kvDurable, ttlDays: JOB_TTL_DAYS, max: JOB_MAX_COUNT, retained: jobs.size },
+        jobs: {
+          store: kv.kind, durable: kvDurable, ttlDays: JOB_TTL_DAYS,
+          max: JOB_MAX_COUNT, retained: jobs.size, evict: jobEvictor.stats,
+        },
         rateLimit: { perMin: RATE_MAX, trustProxyHops: TRUST_PROXY_HOPS, trustCfIp: TRUST_CF_IP, buckets: rateBuckets.size, bucketMax: RATE_BUCKET_MAX },
         budget: { dailyLimit: DAILY_JOB_LIMIT, usedToday: await budget.used() },
         concurrency: { maxInflight: MAX_INFLIGHT_JOBS, maxQueued: MAX_QUEUED_JOBS },
