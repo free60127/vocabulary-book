@@ -318,6 +318,10 @@ try {
     await sleep(2500)
     const calls = await page.evaluate(() => window.__syncCalls || 0)
     ok('切回前台会自动同步一次（不用手点「立即同步」）', calls >= 1, `触发 ${calls} 次拉取`);
+
+    // 顶栏要能看见"上次同步时间"，否则用户无从判断手机到底同步了没有
+    const chip = await page.locator('.chip-detail').innerText()
+    ok('顶栏显示上次同步时间', /同步[^0-9]*(\d{2}:\d{2}|未同步)/.test(chip), chip.replace(/\s+/g, ' '));
     await page.unroute('**/api/sync/*')
   }
 

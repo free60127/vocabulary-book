@@ -55,6 +55,8 @@ export default function App() {
    * ⚠️ 手机端必须**默认收起**：≤900px 时侧栏是 position:fixed 的整屏抽屉，
    * 默认展开就会把主界面整个盖住（实测在 390px 宽的手机上页面完全没法用）。
    * 桌面端则记住上次的选择。 */
+  /* 上次同步时间的"显示用"副本：syncMeta 只在弹窗里读，顶栏也要能看到才安心 */
+  const [lastSyncAt, setLastSyncAt] = useState(() => Number(loadSyncMeta().lastSyncAt) || 0)
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window !== 'undefined' && window.innerWidth <= 900) return false
     return safeGet(SIDE_STATE_KEY, '') !== 'collapsed'
@@ -373,7 +375,7 @@ export default function App() {
         if (mine.books > 0 && rb.length < mine.books) verified = false
       } catch { /* 回读失败不影响本次同步结论，只是少一层确认 */ }
       meta.verified = verified
-      saveSyncMeta(meta); setSyncMeta(meta)
+      saveSyncMeta(meta); setSyncMeta(meta); setLastSyncAt(meta.lastSyncAt)
       const localPart = `本机 ${mine.books} 个本子（${mine.entries} 个词条）`
       if (!verified) {
         setSyncTip(`⚠️ 同步异常：本机 ${mine.books} 个本子已上传，但云端回读只有更少的内容。`
@@ -424,7 +426,7 @@ export default function App() {
       })
       if (!r.ok) { setSyncTip('覆盖失败：' + ((r.data && r.data.error) || ('HTTP ' + r.status))); return }
       const meta = { ...loadSyncMeta(), lastSyncAt: Date.now(), version: r.data.version, localBooks: mine.books, localEntries: mine.entries }
-      saveSyncMeta(meta); setSyncMeta(meta)
+      saveSyncMeta(meta); setSyncMeta(meta); setLastSyncAt(meta.lastSyncAt)
       setSyncTip(`已用本机数据覆盖云端：${mine.books} 个本子、${mine.entries} 个词条。另一台设备点「立即同步」即可拿到。`)
     } catch (e) {
       setSyncTip('覆盖失败：' + (e.message || '网络错误'))
@@ -618,8 +620,11 @@ export default function App() {
    * 只在启动时同步一次是不够的：手机上的页面经常一直开着（加到主屏后更是长期驻留），
    * 那样电脑新存的词永远不会自己出现，每次都得手动点「立即同步」。
    *
-   * 触发时机：切回前台（visibilitychange）+ 窗口获得焦点 + 每 5 分钟兜底一次。
+   * 触发时机：切回前台（visibilitychange）+ 窗口获得焦点 + **页面可见时每 60 秒一次**。
    * 两条节流：距上次同步不足 60 秒不重复跑；同步进行中 runSync 自己会拦。
+   * 60 秒这个间隔是权衡过的：快照只有几 KB，一次拉取就是一条 GET ——
+   * 一分钟一次、一天 1440 条，离 Upstash 免费额度（50 万条/月）还很远，
+   * 换来的是"电脑存完词，手机最多一分钟就自己出现"，这才是用户心里的"自动同步"。
    * 用 runSync(false) —— 后台同步不该弹提示（没新内容时用户不该被打扰），
    * 只有真的同步到了新内容才会 flash 一句。
    */
@@ -634,7 +639,7 @@ export default function App() {
     const onVisible = () => { if (document.visibilityState === 'visible') maybeSync() }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', maybeSync)
-    const timer = setInterval(maybeSync, 5 * 60_000)
+    const timer = setInterval(maybeSync, 60_000)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', maybeSync)
@@ -722,7 +727,12 @@ export default function App() {
           <div className="status-chip" title={status ? status.model + ' @ ' + status.baseUrl : '后端未连接'}>
             <span className={'dot ' + (status ? 'ok' : 'err')} />
             {status ? (hasKey ? 'AI 已配置' : (status.hasKey ? '需要你自己的 Key' : '未配置 API Key')) : '后端未连接'}
-            <span className="chip-detail">{stats.entries} 个词条 · 连续 {streak.current} 天</span>
+            <span className="chip-detail">
+              {stats.entries} 个词条 · 连续 {streak.current} 天
+              {/* 有同步码就把"上次同步时间"摆出来：用户要判断"手机到底同步了没有"，
+                  以前只能打开弹窗看，而且看到的还是"同步完成"这种一次性文案 */}
+              {syncCode ? ` · 同步 ${lastSyncAt ? new Date(lastSyncAt).toTimeString().slice(0, 5) : '未同步'}` : ''}
+            </span>
           </div>
         </header>
 
