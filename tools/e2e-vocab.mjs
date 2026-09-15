@@ -305,7 +305,6 @@ try {
   {
     await page.evaluate(() => { window.__syncCalls = 0 })
     await page.route('**/api/sync/*', async (route) => {
-      const url = route.request().url()
       if (route.request().method() === 'GET') await page.evaluate(() => { window.__syncCalls += 1 })
       await route.continue()
     })
