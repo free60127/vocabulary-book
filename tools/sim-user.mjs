@@ -426,10 +426,31 @@ async function runProfile(browser, p) {
     if (p.touch) check(p.id, '单词本里的热区都够大', book.smallCount === 0, `${book.smallCount} 处：${short(book.small)} [coarse=${book.coarse} vw=${book.vw} inner=${book.innerWidth}]`);
 
     at('本子改名与合并');
-    /* ---------- 4c. 改名 / 合并（原来只能删掉重建，复习进度跟着丢） ---------- */
+    /* ---------- 4c. 改名 / 合并 ----------
+       手机端这两个动作在**本子页顶部**（侧栏只有 268px，三个 44px 图标会把本子名挤成三四个字，
+       实测被当成"手机端看不到我的单词本"）；桌面端侧栏行内也有。这里两边都验一遍。 */
     {
       if (p.touch && (await page.locator('.sidebar').isHidden())) { await page.locator('.side-toggle').click(); await page.waitForTimeout(320); }
-      // 先建第二个本子（走真实的 prompt 流程）
+      // ① 侧栏行：手机上必须只剩一个动作按钮，把宽度让给本子名
+      const row = await page.evaluate(() => {
+        const r = document.querySelector('.lesson-row');
+        if (!r) return null;
+        const item = r.querySelector('.lesson-item');
+        const shown = (sel) => { const el = r.querySelector(sel); return el ? getComputedStyle(el).display !== 'none' : false; };
+        return {
+          itemW: Math.round(item.getBoundingClientRect().width),
+          title: (item.querySelector('.lesson-title')?.textContent || '').trim(),
+          edit: shown('.lesson-edit'), merge: shown('.lesson-merge'), del: shown('.lesson-del'),
+        };
+      });
+      check(p.id, '侧栏单词本行显示得出名字（标题宽度 ≥160px）', Boolean(row) && row.itemW >= 160 && row.title.length > 0,
+        row ? `${row.itemW}px · 「${row.title}」` : '没有本子行');
+      if (p.touch) {
+        check(p.id, '手机端侧栏只留删除（改名/合并挪到本子页）', row && !row.edit && !row.merge && row.del,
+          row ? `改名=${row.edit} 合并=${row.merge} 删除=${row.del}` : '');
+      }
+
+      // ② 新建第二个本子（走真实的 prompt 流程）
       prompts.push('临时本子');
       await page.locator('.sidebar .primary-btn').click();
       await page.waitForTimeout(400);
@@ -437,20 +458,22 @@ async function runProfile(browser, p) {
       check(p.id, '新建第二个单词本', two.length === 2, two.join(' / '));
       await shot('sidebar-two-books');
 
-      // 把有词条的那个本子并进空本子：词条要跟着走，源本子要消失
-      const merge = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll('.lesson-row')];
-        const row = rows.find((r) => /我的单词本/.test(r.textContent));
-        const btn = row && row.querySelector('.lesson-merge');
-        if (btn) btn.click();
-        return Boolean(btn);
-      });
-      check(p.id, '本子行上有「合并」入口', merge);
+      // ③ 进第一个本子，用它页面上的「合并」
+      if (p.touch && (await page.locator('.sidebar').isHidden()) === false) { await page.locator('.sidebar-close').click(); await page.waitForTimeout(220); }
+      // ⚠️ 已经在某个本子里时**不能**再点侧栏那一行：它是"打开/收起"开关，再点一次会把本子收起来
+      if ((await page.locator('.entry-row').count()) === 0) {
+        await openBook();
+        await page.waitForSelector('.entry-row', { timeout: 8000 });
+      }
+      const ops = await page.evaluate(() => [...document.querySelectorAll('.book-ops button')].map((b) => b.textContent.trim()));
+      check(p.id, '本子页顶部有「改名 / 合并」', ops.some((t) => /改名/.test(t)) && ops.some((t) => /合并/.test(t)), ops.join(' / '));
+
+      await page.locator('.book-ops button', { hasText: '合并' }).click();
       await page.waitForSelector('.merge-modal', { timeout: 8000 });
       const mergeModal = await auditShot('merge-modal');
       check(p.id, '合并弹窗完整在视口内', !mergeModal.modalBox || mergeModal.modalBox.fitsH, short(mergeModal.modalBox));
       await page.locator('.merge-modal .primary-btn').click();
-      await page.waitForTimeout(600);
+      await page.waitForTimeout(700);
       const afterMerge = await page.evaluate(() => {
         const books = JSON.parse(localStorage.getItem('vb-books') || '[]');
         return {
@@ -462,19 +485,19 @@ async function runProfile(browser, p) {
       check(p.id, '合并后只剩一个本子、词条搬了过去', afterMerge.names.length === 1 && afterMerge.heads.includes('object'), short(afterMerge));
       check(p.id, '被合并掉的本子留了墓碑（否则下次同步会复活）', afterMerge.tombstones >= 1, `墓碑 ${afterMerge.tombstones} 个`);
 
-      // 改名
-      if (p.touch && (await page.locator('.sidebar').isHidden())) { await page.locator('.side-toggle').click(); await page.waitForTimeout(320); }
-      await page.locator('.lesson-edit').first().click({ force: true });
+      // ④ 改名（同一个位置）
+      await page.waitForTimeout(300);
+      if ((await page.locator('.book-ops button', { hasText: '改名' }).count()) === 0) await openBook();
+      await page.locator('.book-ops button', { hasText: '改名' }).click();
       await page.waitForSelector('.rename-modal', { timeout: 8000 });
       await page.locator('.rename-modal input').fill('阅读词汇');
       await auditShot('rename-modal');
       await page.locator('.rename-modal .primary-btn').click();
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(600);
       const renamed = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').map((b) => b.name));
       check(p.id, '改名生效（词条与排期不受影响）', renamed.length === 1 && renamed[0] === '阅读词汇', renamed.join('/'));
       const stillThere = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]')[0].entries.map((e) => e.head));
       check(p.id, '改名后词条还在', stillThere.includes('object') && stillThere.length >= 1, stillThere.join(','));
-      if (p.touch && (await page.locator('.sidebar').isHidden()) === false) { await page.locator('.sidebar-close').click(); await page.waitForTimeout(200); }
     }
 
     at('返回键');

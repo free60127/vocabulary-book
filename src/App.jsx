@@ -124,6 +124,13 @@ export default function App() {
   const [spell, setSpell] = useState(loadSpell)
   /* 拼写练习（过完一轮之后的加练）：只练不写排期 */
   const [practice, setPractice] = useState(false)
+  /**
+   * 当前这一轮是否已经进入"拼写阶段"。
+   * 与 spell（用户的勾选）分开：**勾选只是预约** —— 本轮照常翻面评分，做完再从第 1 个开始拼写。
+   * 之前把两者合成一个，勾上的瞬间当前这张卡就变成拼写题、之后一路拼过去，
+   * 用户的原话是"不是现在开启后就变成拼写，然后拼一个过一个"。
+   */
+  const [spellRun, setSpellRun] = useState(false)
 
   const cloud = useCloud({ getLocal: () => local, applyMerged, flash })
   const {
@@ -301,11 +308,18 @@ export default function App() {
   // 一句让他去改服务端 .env 的报错 —— 那是给站长看的，不是给他看的。
   const hasKey = Boolean(settings.apiKey || (status?.hasKey && status?.serverKeyAllowed !== false))
   const nextDue = useMemo(() => nextDueAt(entries, schedule), [entries, schedule])
-  /** 队列构成：本子里多少个 + 收藏夹多少个（"为什么是 46 而不是 15"一眼能答） */
-  const queueMix = useMemo(() => ({
-    book: due.filter((x) => x.kind === 'entry').length,
-    fav: due.filter((x) => x.kind === 'favorite').length,
-  }), [due])
+  /**
+   * 队列构成：本子里多少个 + 收藏夹多少个（"为什么是 46 而不是 15"一眼能答）。
+   * ⚠️ 复习进行中必须按**这一轮的队列**算，不能按"此刻还到期的"——
+   * 后者会随着每评一张卡一路缩水，出现"复习 19/43 但本子 0 · 收藏 25"这种自相矛盾的数字（实测）。
+   */
+  const queueMix = useMemo(() => {
+    const src = (view === 'review' && reviewQueue) ? reviewQueue : due
+    return {
+      book: src.filter((x) => x.kind === 'entry').length,
+      fav: src.filter((x) => x.kind === 'favorite').length,
+    }
+  }, [due, view, reviewQueue])
   /* 已斩掉的词（带释义，便于在管理弹窗里认出是哪个词） */
   const killedList = useMemo(() => {
     const keys = killedSet(killed, revived)
@@ -536,7 +550,7 @@ export default function App() {
   /* ---------- 复习 ---------- */
   const startReview = () => {
     if (!due.length) { flash('今天没有到期的词 —— 去查几个新词，或在收藏夹里收几个'); return }
-    setReviewQueue(due); setReviewIndex(0); setRevealed(false); setPractice(false); setView('review')
+    setReviewQueue(due); setReviewIndex(0); setRevealed(false); setPractice(false); setSpellRun(false); setView('review')
   }
   /* 斩掉：立刻从当前这一轮里也拿掉（不然用户还要再看它一次） */
   const killCurrent = (item) => {
@@ -546,6 +560,15 @@ export default function App() {
     setRevealed(false)
     flash('已斩掉「' + (item.head || '') + '」，以后不再进复习清单', TIP_LONG_MS)
   }
+  /**
+   * 进入拼写阶段：同一批词、从第 1 个开始、只练不写排期。
+   * 两条入口：① 用户勾了拼写模式 → 本轮做完自动进来；② 完成页手动点「用拼写再过一遍」。
+   */
+  const startSpellRun = useCallback(() => {
+    setSpellRun(true)
+    setPractice(true)
+    setReviewIndex(0); setRevealed(false)
+  }, [])
   const grade = (g) => {
     const cur = reviewQueue && reviewQueue[reviewIndex]
     if (!cur) return
@@ -557,6 +580,13 @@ export default function App() {
     // 间隔会被推得越来越长，"练"反而把复习计划搞乱
     if (!practice) gradeEntry(cur, g)
     else markStudied()
+    // 这一轮的最后一张？若用户勾了拼写模式（= 预约），就从第 1 个开始拼写这一批词
+    if (reviewIndex + 1 >= reviewQueue.length && spell && !spellRun) {
+      flash('这一轮完成 —— 从第 1 个开始拼写这 ' + reviewQueue.length + ' 个词', TIP_LONG_MS)
+      setReviewIndex(0); setRevealed(false)
+      startSpellRun()
+      return
+    }
     setReviewIndex((i) => i + 1); setRevealed(false)
   }
   /* 拼写出错 / 拼写时看了答案：也进错词本（ReviewPane 在那一刻回调） */
@@ -568,16 +598,15 @@ export default function App() {
     setWrongOpen(false)
     setReviewQueue(q); setReviewIndex(0); setRevealed(false); setPractice(true); setView('review')
   }
-  /* 过完一轮之后：可以拿同一批词开一轮拼写练习（用户明确要的"过完一轮再开拼写"） */
+  /* 过完一轮之后手动开一轮拼写练习（与"预约自动进入"是同一个动作） */
   const restartSpell = () => {
     if (!reviewQueue || !reviewQueue.length) return
     setSpell(true)
-    setPractice(true)
-    setReviewIndex(0); setRevealed(false)
+    startSpellRun()
   }
   const exitReview = () => {
     const n = reviewQueue ? Math.min(reviewIndex, reviewQueue.length) : 0
-    setView('search'); setReviewQueue(null); setPractice(false)
+    setView('search'); setReviewQueue(null); setPractice(false); setSpellRun(false)
     if (n > 0) flash('这一轮复习完成，共 ' + n + ' 个词', TIP_LONG_MS)
   }
 
@@ -694,7 +723,13 @@ export default function App() {
           <ReviewPane queue={reviewQueue} index={reviewIndex} revealed={revealed} schedule={schedule}
             spell={spell} practice={practice} killedCount={killedList.length} wrongCount={wrongItems.length}
             mix={practice ? null : queueMix}
-            onToggleSpell={setSpell} onRestartSpell={restartSpell}
+            spellRun={spellRun}
+            onToggleSpell={(on) => {
+              setSpell(on)
+              // 在拼写阶段里把它关掉 = "我不拼了"：结束拼写轮，回到完成页
+              if (!on && spellRun) { setSpellRun(false); setPractice(false) }
+            }}
+            onRestartSpell={restartSpell}
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
             onSpellWrong={noteSpellWrong}
             onReveal={() => setRevealed(true)} onGrade={grade} onKill={killCurrent} onExit={exitReview} />
@@ -714,7 +749,10 @@ export default function App() {
             onOpenEntry={(e) => { setEntry(e); setView('search') }}
             onDeleteEntry={(e) => deleteEntry(activeBook.id, e)}
             onQuizForBook={() => { setQuizScope('book'); setQuizSetupOpen(true) }}
-            onExportPdf={() => startPrint({ kind: 'book', book: activeBook })} />
+            onExportPdf={() => startPrint({ kind: 'book', book: activeBook })}
+            onRenameBook={() => setRenameTarget(activeBook)}
+            onMergeBook={() => setMergeTarget(activeBook)}
+            canMerge={books.length > 1} />
         ) : (
           <SearchPane
             query={query} setQuery={setQuery} onLookup={runLookup}

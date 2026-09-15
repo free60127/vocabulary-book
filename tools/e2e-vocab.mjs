@@ -320,7 +320,7 @@ try {
   }
   ok('导出备份文件（内容含刚存的词条）', backupOk);
 
-  await page.locator('button:has-text("生成同步码")').click();
+  await page.locator('.backup-modal button:has-text("生成同步码")').click();
   await page.waitForSelector('.sync-code', { timeout: 20000 });
   const code = (await page.locator('.sync-code').innerText()).trim();
   ok('生成同步码（32 位十六进制）', /^[a-f0-9]{32}$/.test(code), code);

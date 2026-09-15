@@ -973,3 +973,18 @@ body.drawer-open { overflow: hidden; }
   .safety-banner { align-items: stretch; }
   .safety-actions { width: 100%; justify-content: flex-end; }
 }
+
+/* ---------- 本子行：手机上只留"删除"，改名/合并在本子页 ----------
+   实测：268px 的侧栏里三个 44px 的图标按钮吃掉 132px，本子名只剩 111px，
+   长一点的名字直接缩成三四个字，用户以为"手机端看不到我的单词本"。 */
+@media (pointer: coarse) {
+  .lesson-edit, .lesson-merge { display: none; }
+  /* 手机上删除键给一点对比度：12px 的灰色图标在深色底上几乎看不见 */
+  .lesson-del { color: #b9cad6; }
+}
+/* 本子页顶部的改名 / 合并 */
+.book-ops { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+@media (max-width: 560px) {
+  .panel-head { flex-wrap: wrap; }
+  .book-ops { margin-left: 0; width: 100%; }
+}

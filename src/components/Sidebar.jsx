@@ -36,6 +36,10 @@ export default function Sidebar({
                 <span className="lesson-title">{b.name}</span>
                 <span className="lib-count">{b.entries.length}</span>
               </button>
+              {/* 改名 / 合并只在桌面端出现在行内（那里有 hover、行也宽）；
+                  手机端这两个动作在**本子自己的页面**顶部（侧栏只有 268px，
+                  三个 44px 的图标按钮会把本子名挤成三四个字 —— 实测被当成"看不到单词本"）。
+                  删除留在行内：清空一个本子是高频动作，藏在二级页面反而别扭。 */}
               <button className="lesson-edit" onClick={() => onRenameBook(b)} title="给这个本子改名" aria-label={'重命名 ' + b.name}><Pencil size={12} /></button>
               {books.length > 1 ? (
                 <button className="lesson-merge" onClick={() => onMergeBook(b)} title="把这个本子并进另一个本子" aria-label={'合并 ' + b.name}><GitMerge size={12} /></button>

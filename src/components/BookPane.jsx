@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronRight, FileDown, Sparkles, Trash2, Volume2 } from 'lucide-react';
+import { ChevronRight, FileDown, GitMerge, Pencil, Sparkles, Trash2, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { dueLabel, scheduleOf } from '../review.js';
 import { speak } from '../speak.js';
@@ -19,6 +19,7 @@ const PAGE = 60;
 export default function BookPane({
   book, entries, total, filters, sorts, query, setQuery, kindFilter, setKindFilter,
   sortMode, setSortMode, schedule, onOpenEntry, onDeleteEntry, onQuizForBook, onExportPdf,
+  onRenameBook, onMergeBook, canMerge,
 }) {
   const [shown, setShown] = useState(PAGE);
   const sentinelRef = useRef(null);
@@ -48,6 +49,11 @@ export default function BookPane({
             {total} 个词条
             {entries.length !== total ? ` · 筛出 ${entries.length}` : ''}
           </span>
+          {/* 改名 / 合并放在本子自己的页面：这里空间足、语义也对（正在看这个本子时才改它） */}
+          <div className="book-ops">
+            <button className="ghost-btn sm" onClick={onRenameBook} title="给这个本子改名"><Pencil size={13} />改名</button>
+            {canMerge ? <button className="ghost-btn sm" onClick={onMergeBook} title="把这个本子并进另一个本子"><GitMerge size={13} />合并</button> : null}
+          </div>
         </div>
         <div className="book-toolbar">
           <input className="fav-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="在本子里搜词条 / 释义 / 近义词" />

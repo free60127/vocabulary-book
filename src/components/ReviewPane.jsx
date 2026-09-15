@@ -38,10 +38,13 @@ function cardOf(item) {
  *  ③ **斩掉**：这个词我认识，以后别再进复习清单（可在「已斩掉的词」里恢复）。
  */
 export default function ReviewPane({
-  queue, index, revealed, schedule, spell, practice, killedCount, wrongCount, mix,
+  queue, index, revealed, schedule, spell, spellRun, practice, killedCount, wrongCount, mix,
   onReveal, onGrade, onKill, onToggleSpell, onRestartSpell, onExit, onManageKilled, onManageWrong,
   onSpellWrong,
 }) {
+  // 「正在拼写」= 用户勾了拼写 **且** 这一轮已经进入拼写阶段。
+  // 只勾选不进阶段：本轮照常翻面评分，做完才从第 1 个开始拼（用户明确要的时序）。
+  const spelling = Boolean(spell && spellRun);
   const [answer, setAnswer] = useState('');
   const [hintLevel, setHintLevel] = useState(0);
   const [missCount, setMissCount] = useState(0);
@@ -50,12 +53,14 @@ export default function ReviewPane({
   const touchStart = useRef(null);
   const item = queue[index];
   const done = !item;
+  /* 完成页上 spellRun 可能刚被清掉，所以用"上一轮是不是拼写轮"来定文案 */
+  const spellingState = spelling || (done && practice && spell);
 
   /* 换卡就清干净：输入框、提示级数、错误次数、上一张的"拼对了" */
   useEffect(() => {
     setAnswer(''); setHintLevel(0); setMissCount(0); setSolved(false);
-    if (spell && !done && inputRef.current) inputRef.current.focus();
-  }, [index, spell, done]);
+    if (spelling && !done && inputRef.current) inputRef.current.focus();
+  }, [index, spelling, done]);
 
   /* 键盘快捷键：拼写模式下不抢输入框的键（回车交给表单提交） */
   useEffect(() => {
@@ -64,13 +69,13 @@ export default function ReviewPane({
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') { e.preventDefault(); onExit(); return; }
-      if (spell) return;                       // 拼写模式只用输入框与按钮
+      if (spelling) return;                    // 拼写阶段只用输入框与按钮
       if (!revealed && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); onReveal(); return; }
       if (revealed && KEY_TO_GRADE[e.key]) { e.preventDefault(); onGrade(KEY_TO_GRADE[e.key]); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [revealed, spell, onExit, onReveal, onGrade]);
+  }, [revealed, spelling, onExit, onReveal, onGrade]);
 
   const onTouchStart = (e) => {
     const t = e.touches && e.touches[0];
@@ -79,7 +84,7 @@ export default function ReviewPane({
   const onTouchEnd = (e) => {
     const start = touchStart.current;
     touchStart.current = null;
-    if (!start || spell || !revealed) return;   // 拼写模式下左右滑动会把刚打的字滑没
+    if (!start || spelling || !revealed) return;   // 拼写阶段左右滑动会把刚打的字滑没
     const t = e.changedTouches && e.changedTouches[0];
     if (!t) return;
     const dx = t.clientX - start.x;
@@ -121,11 +126,14 @@ export default function ReviewPane({
         <div className="panel review-pane">
           <div className="panel-head"><h2>本轮完成</h2></div>
           <p className="review-done-line">
-            这一轮复习了 <b>{queue.length}</b> 个词{practice ? (spell ? '（拼写练习）' : '（错词练习）') : ''}。
+            这一轮复习了 <b>{queue.length}</b> 个词{practice ? (spellingState ? '（拼写练习）' : '（错词练习）') : ''}。
             {practice ? '练习模式不改变复习排期。' : '下一次到期时会自动回到「今日待复习」。'}
           </p>
           <div className="review-done-actions">
-            <button className="primary-btn" onClick={onRestartSpell}><Sparkles size={15} />用拼写再过一遍这 {queue.length} 个词</button>
+            {/* 拼写阶段里"再来一遍"= 重新开始拼写；普通一轮完成时 = 进入拼写 */}
+            <button className="primary-btn" onClick={onRestartSpell}>
+              <Sparkles size={15} />{spellingState ? '再拼一轮这 ' + queue.length + ' 个词' : '用拼写再过一遍这 ' + queue.length + ' 个词'}
+            </button>
             <button className="ghost-btn" onClick={onExit}>回到查词</button>
           </div>
           <p className="muted small review-killed-line">
@@ -154,14 +162,15 @@ export default function ReviewPane({
     <section className="editor">
       <div className="panel review-pane">
         <div className="panel-head">
-          <h2>复习 {index + 1} / {queue.length}{practice ? (spell ? ' · 拼写练习' : ' · 错词练习') : ''}</h2>
+          <h2>复习 {index + 1} / {queue.length}{practice ? (spelling ? ' · 拼写练习' : ' · 错词练习') : ''}</h2>
           {mix && (mix.fav > 0) ? (
             <span className="queue-mix muted small" title="今日待复习的构成：单词本里的到期词 + 收藏夹里还没收进本子的词">
               本子 {mix.book} · 收藏 {mix.fav}
             </span>
           ) : null}
           <div className="review-head-tools">
-            <label className="spell-switch" title="打开后要拼对单词才能进入下一个">
+            <label className="spell-switch"
+              title={spelling ? '正在拼写这一批词；取消即结束拼写' : '勾上后：这一轮照常做完，然后从第 1 个开始拼写这一批词'}>
               <input type="checkbox" checked={spell} onChange={(e) => onToggleSpell(e.target.checked)} />
               <span>拼写模式</span>
             </label>
@@ -181,10 +190,18 @@ export default function ReviewPane({
             onClick={(e) => { e.stopPropagation(); speak(c.head); }}><Volume2 size={16} /></button>
         </div>
         <p className="muted small">
-          {spell ? '把对应的单词拼出来（拼对才进入下一个）' : `先回想它的意思与用法，再${revealed ? '评分' : '点一下这个词（或按空格）翻面核对'}`}
+          {spelling
+            ? '把对应的单词拼出来（拼对才进入下一个）'
+            : `先回想它的意思与用法，再${revealed ? '评分' : '点一下这个词（或按空格）翻面核对'}`}
         </p>
+        {spell && !spelling && !practice ? (
+          <p className="spell-reserved small" role="status">
+            已预约拼写：这一轮做完（还剩 {Math.max(0, queue.length - index)} 个）后，
+            <b>从第 1 个开始</b>拼写这 {queue.length} 个词
+          </p>
+        ) : null}
 
-        {spell ? (
+        {spelling ? (
           <form className="spell-box" onSubmit={submitSpelling}>
             <div className="spell-input-row">
               <input ref={inputRef} className={'spell-input' + (missCount && !solved ? ' wrong' : '') + (solved ? ' ok' : '')}
