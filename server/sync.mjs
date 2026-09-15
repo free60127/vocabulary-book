@@ -26,7 +26,7 @@ export const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
 export const SNAPSHOT_LIMITS = Object.freeze({
   books: 100,               // 单词本数量
   entriesPerBook: 5000,     // 每个本子的词条上限
-  history: 200,             // 最近查询记录
+  history: 60,              // 最近查询记录（每条带一份词条快照，所以条数收紧）
   deletedBooks: 200,        // 已删除的单词本 id（墓碑）
   deletedEntries: 5000,     // 已删除的词条（bookId|entryId）
   days: 400,                // 学习日期（连续天数）：YYYY-MM-DD 去重列表
@@ -39,7 +39,7 @@ export const SNAPSHOT_LIMITS = Object.freeze({
   examplesPerEntry: 20,
   synonymsPerEntry: 20,
   entryBytes: 40000,        // 单条词条的 JSON 体积
-  historyBytes: 2000,
+  historyBytes: 16000,      // 单条历史的上限：放不下快照就只存摘要
 });
 
 export const newSyncCode = () => randomBytes(16).toString('hex');
@@ -102,9 +102,24 @@ export function sanitizeSnapshot(raw) {
   }
   const droppedEntries = books.reduce((n, b) => n + b.entries.length, 0);
 
-  /* ---------- 查询历史 ---------- */
+  /* ---------- 查询历史 ----------
+   * 历史里现在带一份**词条快照**（点历史直接回到那张卡片），所以它和 books 一样是
+   * "外部进来的结构"：必须逐条过 sanitizeEntry。原样透传的话，一份手工构造的快照
+   * 就能把任意形状塞进前端渲染路径（例如 meanings 是字符串 → .map 直接白屏）。
+   * 快照不合法就**降级成只有摘要**的历史条目，而不是整条丢掉 —— 至少还能"重新查一次"。 */
   const history = (Array.isArray(raw.history) ? raw.history : [])
-    .filter((h) => isPlainObject(h) && typeof h.id === 'string' && h.id && jsonBytes(h) <= L.historyBytes)
+    .filter((h) => isPlainObject(h) && typeof h.id === 'string' && h.id)
+    .map((h) => {
+      const base = {
+        id: boundedString(h.id, L.entryIdChars),
+        head: boundedString(h.head, L.headChars),
+        brief: boundedString(h.brief, 600),
+        at: Number(h.at) || 0,
+      };
+      const entry = isPlainObject(h.entry) ? sanitizeEntry(h.entry) : null;
+      const full = entry ? { ...base, entry } : base;
+      return jsonBytes(full) <= L.historyBytes ? full : base;
+    })
     .slice(0, L.history);
 
   /* ---------- 墓碑：只留字符串形状合法的去重值 ---------- */

@@ -19,6 +19,9 @@ services:
     startCommand: node server/index.mjs
     healthCheckPath: /api/health
     envVars:
+      # 固定 Node 版本：不写的话 Render 会跟着默认版本走，某天升级大版本可能把构建搞挂
+      - key: NODE_VERSION
+        value: 22.11.0
       # 不要在这里固定 PORT：Render 会自动注入 PORT，代码端读 process.env.PORT（缺省 8790）
       - key: AI_BASE_URL
         sync: false
@@ -45,6 +48,11 @@ services:
         sync: false
       - key: RATE_LIMIT_PER_MIN
         value: "30"
+      # 每日额度：用服务端 Key 的请求每天最多这么多次（访客自带 Key 不占额度）。
+      # 这是**唯一真正兜住账单的东西** —— 限流是"每 IP 每分钟"，换个 IP 就能接着刷。
+      # 按自己 Key 的付费额度估：一次查词约 3~6k token，300 次足够个人+朋友用。
+      - key: DAILY_JOB_LIMIT
+        value: "300"
 
       # ---- 多设备同步 + 账号的持久存储（强烈建议）----
       # 不配：数据写在容器临时磁盘上，重新部署就没；账号功能会自动关闭（宁可不提供也不骗用户）。

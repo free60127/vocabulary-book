@@ -106,17 +106,15 @@ export function sanitizeDict(raw) {
   return useful ? out : null;
 }
 
-/** 把词典核对结果并回词条（只有真取到东西才挂上去，避免同步里多出一堆空壳） */
+/**
+ * 把词典核对结果并回词条（只有真取到东西才挂上去，避免同步里多出一堆空壳）。
+ * 走 sanitizeEntry 同一条路：两边各写一份清洗逻辑必然漂移。
+ */
 export function attachDict(entry, dict, conflicts) {
   if (!entry) return entry;
-  const clean = sanitizeDict(dict);
-  if (!clean) return entry;
-  const out = { ...entry, dict: clean };
-  const c = isPlainObject(conflicts) ? conflicts : {};
-  const phonetics = stringList(c.phonetics, 120, 3);
-  const missingPos = stringList(c.missingPos, 20, 6);
-  if (phonetics.length || missingPos.length) out.dictConflicts = { phonetics, missingPos };
-  return jsonBytes(out) > ENTRY_LIMITS.entryBytes ? entry : out;
+  if (!sanitizeDict(dict)) return entry;
+  const out = sanitizeEntry({ ...entry, dict, dictConflicts: conflicts });
+  return out || entry;
 }
 
 /**
@@ -172,6 +170,16 @@ export function sanitizeEntry(raw) {
     source: boundedString(raw.source, 200),
     createdAt: Number(raw.createdAt) || Date.now(),
   };
+  // 词典核对块必须在这里透传，否则它会**在云同步/导入的路上被悄悄抹掉**：
+  // 快照里的 books[].entries[] 也要过这个函数，漏一个字段就是"本地有、同步到另一台就没了"。
+  const dict = sanitizeDict(raw.dict);
+  if (dict) {
+    entry.dict = dict;
+    const c = isPlainObject(raw.dictConflicts) ? raw.dictConflicts : {};
+    const phonetics = stringList(c.phonetics, 120, 3);
+    const missingPos = stringList(c.missingPos, 20, 6);
+    if (phonetics.length || missingPos.length) entry.dictConflicts = { phonetics, missingPos };
+  }
   // 单条过大：丢弃这条而不是拒绝整单（免得一条脏数据卡住整个同步）
   return jsonBytes(entry) > ENTRY_LIMITS.entryBytes ? null : entry;
 }

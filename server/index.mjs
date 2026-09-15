@@ -26,6 +26,7 @@ import { createAccounts } from './accounts.mjs';
 import { sendMail } from './mailer.mjs';
 import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, emptySnapshot, sanitizeSnapshot } from './sync.mjs';
 import { staleMsFor } from './job-stale.mjs';
+import { createBudget, budgetMessage } from './budget.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -138,14 +139,17 @@ async function isSafeBaseUrl(raw) {
 async function resolveEndpoint({ bodyBase, bodyKey, fallbackBase, fallbackKey }) {
   const base = String(bodyBase || '').trim();
   const key = normalizeApiKey(bodyKey).key;
+  // visitorKey = 这次用的是**访客自己带来的 Key**（而不是服务端那份）。
+  // 每日额度只算服务端 Key 的请求：别人花自己的钱，没理由被我们的预算卡住。
   if (!base || sameEndpoint(base, fallbackBase)) {
-    return { baseUrl: fallbackBase, apiKey: key || (ALLOW_SERVER_KEY ? fallbackKey : '') };
+    const visitorKey = Boolean(key);
+    return { baseUrl: fallbackBase, apiKey: key || (ALLOW_SERVER_KEY ? fallbackKey : ''), visitorKey };
   }
   if (!(await isSafeBaseUrl(base))) {
     return { error: '该 Base URL 不被允许（只接受公网可解析的 http/https 地址）。如需指向内网地址，请改在服务端 .env 里配置 AI_BASE_URL，或设 ALLOW_PRIVATE_BASE_URL=1' };
   }
   if (!key) return { error: '使用自定义 Base URL 时，必须同时填写该接口的 API Key（服务端密钥不会发往自定义地址）' };
-  return { baseUrl: base.replace(/\/+$/, ''), apiKey: key };
+  return { baseUrl: base.replace(/\/+$/, ''), apiKey: key, visitorKey: true };
 }
 
 /* ---------- 限流（内存滑动窗口，按来源 IP；桶表有界）----------
@@ -171,6 +175,9 @@ const RATE_BUCKET_MAX = Math.max(1, posInt(process.env.RATE_BUCKET_MAX, 20000));
 /* 词典事实层：配了就用（有官方 key 优先官方），显式 off 就纯 AI。见 server/dict.mjs 顶部说明。 */
 const DICT_PROVIDER = resolveProvider(process.env);
 
+/* 每日任务总量上限（0 = 不限）。见下方 dailyBudgetExceeded 的说明。 */
+const DAILY_JOB_LIMIT = Math.max(0, posInt(process.env.DAILY_JOB_LIMIT, 0));
+
 function sweepRateBuckets(now) {
   for (const [k, v] of rateBuckets) if (now > v.resetAt) rateBuckets.delete(k);
   if (rateBuckets.size > RATE_BUCKET_MAX) {
@@ -179,6 +186,9 @@ function sweepRateBuckets(now) {
   }
 }
 setInterval(() => sweepRateBuckets(Date.now()), 60_000).unref();
+
+/* 每日预算闸门（实现在 server/budget.mjs，那里有完整的设计说明与测试） */
+const budget = createBudget({ kv, limit: DAILY_JOB_LIMIT });
 
 function rateLimited(req, bucketKey = '', max = RATE_MAX) {
   const now = Date.now();
@@ -591,6 +601,7 @@ const server = http.createServer(async (req, res) => {
         accounts: { enabled: accountsOn, durable: kvDurable },
         jobs: { store: kv.kind, durable: kvDurable, ttlDays: JOB_TTL_DAYS, max: JOB_MAX_COUNT, retained: jobs.size },
         rateLimit: { perMin: RATE_MAX, trustProxyHops: TRUST_PROXY_HOPS, trustCfIp: TRUST_CF_IP, buckets: rateBuckets.size, bucketMax: RATE_BUCKET_MAX },
+        budget: { dailyLimit: DAILY_JOB_LIMIT, usedToday: await budget.used() },
         concurrency: { maxInflight: MAX_INFLIGHT_JOBS, maxQueued: MAX_QUEUED_JOBS },
         mail: { configured: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) },
         dict: { provider: DICT_PROVIDER, ...dictStats() },
@@ -628,6 +639,12 @@ const server = http.createServer(async (req, res) => {
       const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
       if (ep.error) return json(res, 400, { error: ep.error });
       if (!ep.apiKey) return json(res, 400, { error: '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key' });
+      // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
+      // 只有**用服务端 Key** 的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
 
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'lookup', title: term, status: 'pending', createdAt: Date.now(), data: null, error: null });
@@ -647,6 +664,11 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/quiz' && req.method === 'POST') {
       if (rateLimited(req)) return json(res, 429, { error: '请求过于频繁，请稍后再试' });
       const body = await readBody(req, 256 * 1024);
+      const epQuiz = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
+      if (!epQuiz.error && !epQuiz.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
       const points = (Array.isArray(body.points) ? body.points : [])
         .map((x) => String(x || '').trim()).filter(Boolean).slice(0, 60);
       if (!points.length) return json(res, 400, { error: '请先选择要出题的词条' });
@@ -778,6 +800,7 @@ server.listen(PORT, () => {
   console.log('限流: ' + RATE_MAX + ' 次/分钟 · 可信代理 ' + TRUST_PROXY_HOPS + ' 跳'
     + (TRUST_CF_IP ? ' · 信任 CF-Connecting-IP' : ''));
   console.log('并发闸门: 同时 ' + MAX_INFLIGHT_JOBS + ' 个任务 · 排队上限 ' + MAX_QUEUED_JOBS);
+  console.log('每日额度: ' + (DAILY_JOB_LIMIT ? DAILY_JOB_LIMIT + ' 次（仅算用服务端 Key 的请求）' : '不限（DAILY_JOB_LIMIT=0）'));
   console.log('词典核对: ' + (DICT_PROVIDER === 'off'
     ? '未启用（DICT_PROVIDER=off，讲解完全由模型生成）'
     : DICT_PROVIDER + (DICT_PROVIDER === 'youdao-web' ? '（免费网页接口，非官方，可能失效）' : '（官方开放平台）')));

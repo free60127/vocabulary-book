@@ -5,7 +5,7 @@
  * 被 iframe 嵌入时会抛 SecurityError，而这些调用出现在首次 render 的惰性初始化里 ——
  * 一抛就是整页白屏，且没有降级路径。（回译本上实测过。）
  */
-import { mergeBooks, sanitizeBook } from './wordbook.js';
+import { mergeBooks, sanitizeBook, sanitizeEntry } from './wordbook.js';
 import { mergeDays, mergeSchedules } from './review.js';
 
 export const BOOKS_KEY = 'vb-books';
@@ -55,8 +55,80 @@ export const loadDays = () => parseArray(safeGet(DAYS_KEY, '[]')).filter((d) => 
 export const saveDays = (days) => safeSet(DAYS_KEY, JSON.stringify((Array.isArray(days) ? days : []).slice(0, 400)));
 
 /* ---------- 查询历史 ---------- */
-export const loadHistory = () => parseArray(safeGet(HISTORY_KEY, '[]')).filter((h) => h && typeof h === 'object');
-export const saveHistory = (list) => safeSet(HISTORY_KEY, JSON.stringify((Array.isArray(list) ? list : []).slice(0, 200)));
+/**
+ * 读历史。**这里必须清洗**：历史带着词条快照，而快照会从导入的备份文件、
+ * 云同步快照回来 —— 两个来源都不可信。卡片渲染会对 meanings/examples 直接 .map，
+ * 一份被改过的备份就能让页面白屏（这正是 sanitizeEntry 存在的理由）。
+ */
+export const loadHistory = () => parseArray(safeGet(HISTORY_KEY, '[]'))
+  .filter((h) => h && typeof h === 'object' && h.id)
+  .map((h) => {
+    const base = {
+      id: String(h.id).slice(0, 64),
+      head: String(h.head == null ? '' : h.head).slice(0, 200),
+      brief: String(h.brief == null ? '' : h.brief).slice(0, 600),
+      at: Number(h.at) || 0,
+    };
+    const entry = h.entry ? sanitizeEntry(h.entry) : null;
+    return entry ? { ...base, entry } : base;
+  });
+
+/* ---------- 最近查过 ----------
+ * 每条历史里存一份**查完的词条快照**，点历史就能直接回到那张卡片。
+ *
+ * 以前只存 {id, head, brief}：点一下只是把词填回搜索框，要再点"查一下"、再等一次模型 ——
+ * 用户的原话是"点这个最近查过的单词不能直接跳转到查完的界面，加入到单词本的才可以"。
+ * 存快照之后：秒开、不花钱、断网也能看（词条本来就是要反复回看的东西）。
+ *
+ * 代价是 localStorage 和云同步快照会变大，所以三道闸都要有：
+ *   · 单条超限的**不存快照**（只留 head），降级成"填回搜索框"的老行为；
+ *   · 条数上限 50；
+ *   · 总量上限 600KB，超了从最旧的开始丢。
+ */
+export const HISTORY_LIMIT = 50;
+export const HISTORY_BYTES = 600 * 1024;
+export const HISTORY_ITEM_BYTES = 16 * 1024;
+
+const itemBytes = (h) => {
+  try { return JSON.stringify(h).length; } catch { return Infinity; }
+};
+
+/** 把一次查词结果做成历史条目（entry 过大时只留摘要） */
+export function makeHistoryItem(entry, at = Date.now()) {
+  if (!entry || !entry.id) return null;
+  const base = { id: entry.id, head: entry.head, brief: entry.brief || '', at };
+  const withEntry = { ...base, entry };
+  return itemBytes(withEntry) <= HISTORY_ITEM_BYTES ? withEntry : base;
+}
+
+/** 排序 + 条数 + 总量三重收口（pushHistory 与 mergeHistory 共用同一套规则） */
+function orderHistory(list, limit, bytes) {
+  const out = (Array.isArray(list) ? list : []).filter((h) => h && h.id)
+    .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+  const kept = [];
+  let used = 0;
+  for (const h of out) {
+    if (kept.length >= limit) break;
+    const size = itemBytes(h);
+    if (size !== Infinity && used + size > bytes) {
+      // 超预算时，先退一步：丢掉快照只留摘要，摘要也放不下才整条丢
+      const slim = h.entry ? { id: h.id, head: h.head, brief: h.brief, at: h.at } : null;
+      const slimSize = slim ? itemBytes(slim) : Infinity;
+      if (slim && used + slimSize <= bytes) { kept.push(slim); used += slimSize; }
+      continue;
+    }
+    kept.push(h); used += size;
+  }
+  return kept;
+}
+
+/** 压入一条历史：同 id 去重（新的顶掉旧的）、按时间倒序、条数与总量双上限 */
+export function pushHistory(list, item, { limit = HISTORY_LIMIT, bytes = HISTORY_BYTES } = {}) {
+  if (!item || !item.id) return Array.isArray(list) ? list : [];
+  return orderHistory([item, ...(Array.isArray(list) ? list : []).filter((h) => h && h.id !== item.id)], limit, bytes);
+}
+
+export const saveHistory = (list) => safeSet(HISTORY_KEY, JSON.stringify(pushHistory(list)));
 
 /* ---------- 删除墓碑 ----------
  * 云同步的合并是**并集**：只在本机删除的话，下一次同步会把云端旧副本原样并回来，
@@ -100,16 +172,22 @@ export function unionTombstones(a, b, limit = 5000) {
   return out.slice(-limit);
 }
 
-/** 历史合并：按 id 去重、新的在前、只留最近 N 条 */
-export function mergeHistory(local, remote, limit = 200) {
-  const seen = new Set();
-  const out = [];
+/**
+ * 历史合并：按 id 去重、新的在前。
+ *
+ * 同一个 id 出现两次时**留 at 更大的那条**（而不是"本机优先"）：
+ * 历史里现在带着词条快照，两台设备各查过一次同一个词，谁的新就该留谁的 ——
+ * 老实现按出现顺序取第一条，会把本机那份旧快照固定下来，另一端的新讲解永远同步不过来。
+ * 两边都没有 at 的（早期数据）退化成原来的"本机优先"。
+ */
+export function mergeHistory(local, remote, limit = HISTORY_LIMIT) {
+  const best = new Map();
   for (const h of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
-    if (!h || !h.id || seen.has(h.id)) continue;
-    seen.add(h.id);
-    out.push(h);
+    if (!h || !h.id) continue;
+    const prev = best.get(h.id);
+    if (!prev || (Number(h.at) || 0) > (Number(prev.at) || 0)) best.set(h.id, h);
   }
-  return out.sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0)).slice(0, limit);
+  return orderHistory([...best.values()], limit, Infinity).slice(0, limit);
 }
 
 /** 把云端快照合并进本机（纯计算，不落盘；落盘由调用方决定） */

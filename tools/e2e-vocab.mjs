@@ -178,6 +178,40 @@ try {
   ok('加入单词本成功（本机落盘）', afterSave.books.length === 1 && afterSave.books[0].entries.length === 1, afterSave.flag || '');
   ok('新词条立刻有复习排期（当天到期）', Object.keys(afterSave.schedule).length === 1, JSON.stringify(afterSave.schedule).slice(0, 60));
 
+  /* ---------- ①c 最近查过：点一下要能**直接回到查完的界面** ---------- */
+  // 用户原话："点这个最近查过的单词不能直接跳转到查完的界面，加入到单词本的才可以"
+  {
+    const before = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-history') || '[]'));
+    ok('查完就进历史，且带了词条快照', before.length === 1 && Boolean(before[0].entry), JSON.stringify(before.map((h) => Object.keys(h))));
+
+    // 先离开卡片（进单词本再回来），确认点历史是真的重新渲染出卡片
+    await page.locator('.lesson-item').first().click();
+    await page.waitForSelector('.entry-row', { timeout: 8000 });
+    ok('离开卡片后不在词条界面', (await page.locator('.entry-card').count()) === 0);
+
+    await page.locator('.lesson-list').last().locator('.lesson-item').first().click();
+    await page.waitForSelector('.entry-card', { timeout: 8000 });
+    const back = await page.evaluate(() => ({
+      head: document.querySelector('.entry-card h1')?.textContent.trim(),
+      sections: document.querySelectorAll('.entry-card .section-heading h2').length,
+      dict: Boolean(document.querySelector('.dict-section')),
+    }));
+    ok('点「最近查过」直接回到查完的界面（含词典核对）',
+      /object/i.test(back.head) && back.sections >= 8 && back.dict, `${back.head} · ${back.sections} 个板块`);
+    ok('回到卡片不触发新查询（快照直出）',
+      (await page.locator('.progress-box').count()) === 0 && (await page.locator('.entry-card').count()) === 1);
+
+    // 老数据（只有 head、没有快照）要走"自动重查"而不是干等
+    await page.evaluate(() => localStorage.setItem('vb-history', JSON.stringify([{ id: 'legacy-1', head: 'object', brief: '', at: 1 }])));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.lesson-list .lesson-item', { timeout: 20000 });
+    const legacyTag = await page.locator('.lesson-list').last().locator('.lesson-item').first().innerText();
+    ok('没有快照的老历史标出「需重查」', /需重查/.test(legacyTag), legacyTag.split('\n').join(' '));
+    await page.locator('.lesson-list').last().locator('.lesson-item').first().click();
+    await page.waitForSelector('.entry-card', { timeout: 60000 });
+    ok('点老历史自动补查，仍然落到查完的界面', (await page.locator('.entry-card').count()) === 1);
+  }
+
   /* ---------- ② 单词本：列表 / 筛选 / 排序 ---------- */
   await page.locator('.lesson-item').first().click();
   await page.waitForSelector('.entry-row', { timeout: 8000 });

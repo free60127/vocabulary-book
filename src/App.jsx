@@ -11,8 +11,9 @@ import {
 import { submitAndPoll } from './hooks/pollJob.js'
 import {
   LEVEL_KEY, loadBooks, loadDays, loadDeletedBooks, loadDeletedEntries, loadHistory,
-  loadSchedule, loadSettings, localSnapshot, mergeSnapshot, safeSet, saveBooks, saveDays,
-  saveDeletedBooks, saveDeletedEntries, saveHistory, saveSchedule, saveSettings,
+  loadSchedule, loadSettings, localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory,
+  safeSet, saveBooks, saveDays, saveDeletedBooks, saveDeletedEntries, saveHistory,
+  saveSchedule, saveSettings,
 } from './storage.js'
 import {
   KIND_LABEL, allEntries, createBook, entryLabel, entryTombstoneKey, findEntryBook,
@@ -131,7 +132,8 @@ export default function App() {
       const e = out.data && out.data.entry
       if (!e) throw new Error('模型没有返回词条，请重试')
       setEntry(e); setView('search'); setProgress('')
-      const nextHistory = [{ id: e.id, head: e.head, brief: e.brief, at: Date.now() }, ...history.filter((h) => h.head !== e.head)].slice(0, 200)
+      // 连词条快照一起存：点历史要能**直接回到这张卡片**，而不是把词填回搜索框再查一次
+      const nextHistory = pushHistory(history, makeHistoryItem(e))
       setHistory(nextHistory); saveHistory(nextHistory)
       markStudied()
     } catch (err) {
@@ -139,6 +141,25 @@ export default function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /**
+   * 点「最近查过」：有快照就直接回到那张卡片，没有就重查一次。
+   *
+   * 为什么还要管"没有快照"的情况：这个功能上线前存下的历史只有 {id, head}，
+   * 用户点它时预期是"跳转到查完的界面"，所以这里**自动补查**，而不是把词填回搜索框干等 ——
+   * 老行为正是用户反馈的那句"点这个最近查过的单词不能直接跳转"。
+   * 已经收进单词本的词条优先用本子里那份（可能被手动改过）。
+   */
+  const openHistory = (h) => {
+    if (!h) return
+    setQuery(h.head || '')
+    setView('search')
+    const saved = h.id ? findEntryBook(books, h.id) : null
+    const inBook = saved ? (saved.entries || []).find((e) => e.id === h.id) : null
+    if (inBook) { setEntry(inBook); setError(''); return }
+    if (h.entry) { setEntry(h.entry); setError(''); return }
+    runLookup(h.head)
   }
 
   /* ---------- 存入 / 删除 ---------- */
@@ -470,8 +491,10 @@ export default function App() {
               <div className="side-title">最近查过</div>
               <div className="lesson-list" style={{ maxHeight: 150 }}>
                 {history.slice(0, 20).map((h) => (
-                  <button key={h.id} className="lesson-item" onClick={() => { setView('search'); setQuery(h.head) }} title="点一下填回搜索框">
+                  <button key={h.id} className="lesson-item" onClick={() => openHistory(h)}
+                    title={h.entry ? '点一下回到上次查到的讲解' : '点一下重新查这个词'}>
                     <span className="lesson-title">{h.head}</span>
+                    {h.entry ? null : <span className="muted small">需重查</span>}
                   </button>
                 ))}
               </div>
