@@ -178,11 +178,13 @@ export default function ReviewPane({
           </div>
         </div>
 
-        <div className={'review-word' + (!spell && !revealed ? ' tappable' : '')}
+        <div className={'review-word' + (!spelling && !revealed ? ' tappable' : '')}
           onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
-          onClick={() => { if (!spell && !revealed) onReveal(); }}>
-          {/* 拼写模式**不能显示词头**（不然就是抄），只给中文、音标与发音 */}
-          {spell
+          onClick={() => { if (!spelling && !revealed) onReveal(); }}>
+          {/* 只有**真的在拼写**时才藏词头（不然就是抄）。
+              ⚠️ 这里曾经用 spell（用户的勾选）判断 —— 于是刚勾上就变成中文释义，
+              用户的原话是"一开拼写模式全变成中文？"。勾选只是预约，本轮照常显示词头。 */}
+          {spelling
             ? <strong className="spell-question">{c.meaning || c.brief || '（这个词还没有释义）'}</strong>
             : <strong>{c.head}</strong>}
           {c.phonetic ? <span className="phonetic">{c.phonetic}</span> : null}

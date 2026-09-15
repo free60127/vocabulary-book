@@ -526,6 +526,27 @@ async function runProfile(browser, p) {
     const mixText = await page.evaluate(() => document.querySelector('.queue-mix')?.textContent.replace(/\s+/g, ' ').trim() || '');
     check(p.id, '复习页显示队列构成（本子 N · 收藏 M）', /本子\s*\d+/.test(mixText) && /收藏\s*\d+/.test(mixText), mixText);
 
+    /* 拼写模式是"预约"：勾上不该把当前这张卡变成中文释义/拼写题（用户报过"一开拼写模式全变成中文"） */
+    {
+      await page.locator('.spell-switch input').check();
+      await page.waitForTimeout(300);
+      const reserved = await page.evaluate(() => ({
+        head: document.querySelector('.review-word strong')?.textContent.trim() || '',
+        hint: (document.querySelector('.spell-reserved')?.textContent || '').replace(/\s+/g, ' ').trim(),
+        spellInput: document.querySelectorAll('.spell-input').length,
+        gradeBar: document.querySelectorAll('.grade-bar button').length,
+      }));
+      check(p.id, '勾上拼写模式后卡片仍显示英文词头', /^[ -~]+$/.test(reserved.head) && reserved.head.length > 1,
+        reserved.head);
+      check(p.id, '预约提示说明"这一轮做完后从第 1 个开始"', /从第 1 个开始/.test(reserved.hint), reserved.hint.slice(0, 50));
+      check(p.id, '预约态不出拼写输入框、当前卡照常可评分', reserved.spellInput === 0 && reserved.gradeBar === 0);
+      await shot('spell-reserved');
+      await page.locator('.spell-switch input').uncheck();   // 取消预约，后面按普通一轮走
+      // 焦点还留在复选框上时，空格会被浏览器拿去勾选它（而不是翻面）—— 把焦点交还给页面
+      await page.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
+      await page.waitForTimeout(200);
+    }
+
     const reveal = async () => {
       if (p.touch) await page.locator('.review-word').click();
       else await page.keyboard.press('Space');
@@ -1002,6 +1023,42 @@ async function runEdgeCases(browser) {
     check(P, '深色模式：正文对比度 ≥ 4.5', bad.length === 0,
       bad.length ? bad.map((r) => `${r.sel} ${r.ratio}`).join(' · ') : `最低 ${worst.map((r) => r.sel + ' ' + r.ratio).join(' / ')}`);
     await page.screenshot({ path: path.join(SHOTS, 'dark-card.png'), fullPage: false }).catch(() => {});
+    await ctx.close();
+  }
+
+  /* ②c 手机端侧栏（数据饱满时）：本子列表被压扁 = "看不到我的单词本" */
+  {
+    const ctx = await browser.newContext({ ...devices['iPhone SE'] });   // 最小屏最容易复现
+    await ctx.addInitScript(() => {
+      const now = Date.now();
+      const entries = Array.from({ length: 20 }, (_, i) => ({ id: 'wb-' + i, head: 'word' + i, kind: 'word', brief: '释义' + i, meanings: [{ cn: '释义' + i }], createdAt: now - 86400000 }));
+      localStorage.setItem('vb-books', JSON.stringify([{ id: 'bk-1', name: '英语文摘2026', note: '', createdAt: now, entries }]));
+      localStorage.setItem('vb-favorites', JSON.stringify(Array.from({ length: 43 }, (_, i) => ({ id: 'fav-' + i, head: 'fav' + i, brief: '收藏' + i, at: now - i * 1000 }))));
+      localStorage.setItem('vb-history', JSON.stringify(Array.from({ length: 12 }, (_, i) => ({ id: 'h' + i, head: 'hist' + i, brief: '', at: now - i * 1000, entry: null }))));
+    });
+    const page = await ctx.newPage();
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.locator('.side-toggle').click();
+    await page.waitForTimeout(400);
+    const side = await page.evaluate(() => {
+      const row = document.querySelector('.lesson-row');
+      const item = row && row.querySelector('.lesson-item');
+      const title = row && row.querySelector('.lesson-title');
+      const list = document.querySelector('.side-section > .lesson-list');
+      return {
+        listH: list ? Math.round(list.getBoundingClientRect().height) : 0,
+        rowH: row ? Math.round(row.getBoundingClientRect().height) : 0,
+        titleH: title ? Math.round(title.getBoundingClientRect().height) : 0,
+        titleW: title ? Math.round(title.getBoundingClientRect().width) : 0,
+        name: title ? title.textContent : '',
+        itemBottom: item ? Math.round(item.getBoundingClientRect().bottom) : 0,
+      };
+    });
+    check(P, '手机端数据饱满时，单词本行仍然完整可见（没被压扁）',
+      side.listH >= 44 && side.rowH >= 40 && side.titleH >= 12 && side.titleW >= 120,
+      JSON.stringify(side));
+    await page.screenshot({ path: path.join(SHOTS, 'sidebar-dense-mobile.png') }).catch(() => {});
     await ctx.close();
   }
 

@@ -988,3 +988,11 @@ body.drawer-open { overflow: hidden; }
   .panel-head { flex-wrap: wrap; }
   .book-ops { margin-left: 0; width: 100%; }
 }
+
+/* ---------- 侧栏列表不许被压扁（"手机端看不到我的单词本"的真凶） ----------
+   .side-section 是 flex 列 + min-height:0，里面的 .lesson-list 默认 flex-shrink:1 ——
+   收藏夹 43 条 + 最近查过十几条时，空间不够就按比例压缩，**第一个列表（我的单词本）被压成 0 高**，
+   整行直接看不见（实测：44px 的行被压到 25px，再多几条就是 0）。
+   对策：列表保持自然高度，改由 .side-section 自己滚动。 */
+.side-section { overflow-y: auto; }
+.side-section > .lesson-list { flex: none; }

@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -17,9 +18,20 @@ const base = process.env.VITE_BASE || '/';
  */
 const _d = new Date();
 const _p = (n) => String(n).padStart(2, '0');
-// 用**本机时间**：用户对着自己的钟看，"你刷新一下，应该显示 19:15 那版"才说得通
+/** 构建机的提交号 —— 判断"线上是哪一版"最可靠的依据（时间会被时区坑） */
+function gitSha() {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim();
+  } catch { return ''; }
+}
+/**
+ * 构建标识：`<提交号> · <时间>`。
+ * ⚠️ 必须带提交号：托管平台的构建机跑在 **UTC**，只有本地时间的话，
+ * 用户按自己手机上的钟去对（21:02）会看到 13:02，以为"根本没推上去"（真实误会）。
+ */
 const buildId = process.env.VITE_BUILD_ID
-  || `${_p(_d.getMonth() + 1)}-${_p(_d.getDate())} ${_p(_d.getHours())}:${_p(_d.getMinutes())}`;
+  || `${gitSha() ? gitSha() + ' · ' : ''}${_p(_d.getMonth() + 1)}-${_p(_d.getDate())} ${_p(_d.getHours())}:${_p(_d.getMinutes())}${_d.getTimezoneOffset() === 0 ? ' UTC' : ''}`;
 
 export default defineConfig({
   base,
