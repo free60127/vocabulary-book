@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sanitizeEntry } from './resultShape.mjs';
+import { kvPrefix } from './kv.mjs';
 
 const CODE_RE = /^[a-f0-9]{32}$/;
 /** 单份快照上限（纯文本数据，正常远小于这个数） */
@@ -185,7 +186,9 @@ const CAS_LUA = [
 ].join('\n');
 
 /** Upstash Redis REST 驱动（用 JSON 数组形式发命令）。 */
-export function createUpstashStore({ url, token, prefix = 'bts:sync:' }) {
+export function createUpstashStore({ url, token, prefix }) {
+  // 默认取本应用的 KV_PREFIX（原来是写死的 'bts:sync:' —— 和姊妹项目重合，合用同一个库会串数据）
+  const NS = String(prefix === undefined ? kvPrefix() : prefix) + 'sync:';
   const endpoint = String(url).replace(/\/+$/, '');
   const call = async (command) => {
     const r = await fetch(endpoint, {
@@ -211,17 +214,17 @@ export function createUpstashStore({ url, token, prefix = 'bts:sync:' }) {
     durable: true,
     get casMode() { return casMode; },
     async read(code) {
-      return parse(await call(['GET', prefix + code]));
+      return parse(await call(['GET', NS + code]));
     },
     async write(code, doc) {
-      await call(['SET', prefix + code, JSON.stringify(doc)]);
+      await call(['SET', NS + code, JSON.stringify(doc)]);
     },
     /**
      * 原子「版本对得上才写」。
      * @returns {{ok:true} | {ok:false, current: object|null}}
      */
     async compareAndSwap(code, baseVersion, doc) {
-      const key = prefix + code;
+      const key = NS + code;
       const base = Number.isFinite(Number(baseVersion)) ? Number(baseVersion) : -1;
       if (casMode === 'lua') {
         try {
@@ -318,9 +321,9 @@ export function createFileStore(dir) {
  * 配了 UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN 就用 Upstash，否则退回本地文件。
  * @param {string} dataDir 本地文件驱动的数据根目录（调用方传 `data/`，可用 DATA_DIR 环境变量整体搬走）
  */
-export function createSyncStore(dataDir) {
+export function createSyncStore(dataDir, { prefix } = {}) {
   const url = String(process.env.UPSTASH_REDIS_REST_URL || '').trim();
   const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
-  if (url && token) return createUpstashStore({ url, token });
+  if (url && token) return createUpstashStore({ url, token, prefix });
   return createFileStore(path.join(dataDir, 'sync'));
 }

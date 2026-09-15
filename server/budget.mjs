@@ -13,12 +13,12 @@
  *  · 计数失败时**放行**（fail-open）：它是个保护措施，不该因为计数器读不出来就让所有人查不了词。
  */
 
-export const budgetKey = (day) => 'jobs-spent:' + day;
+export const budgetKey = (day, prefix = 'vb:') => prefix + 'spent:' + day;
 export const today = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 
-export function createBudget({ kv, limit = 0, ttlSec = 48 * 3600, now = Date.now, log = console }) {
+export function createBudget({ kv, limit = 0, ttlSec = 48 * 3600, now = Date.now, log = console, prefix = 'vb:' }) {
   const enabled = Number(limit) > 0;
-  const key = () => budgetKey(today(now()));
+  const key = () => budgetKey(today(now()), prefix);
 
   /** 记一次消费。返回 { ok, used, limit }；ok=false 表示已超额度，调用方应拒绝。 */
   async function spend(n = 1) {

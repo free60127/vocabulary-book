@@ -24,15 +24,7 @@
  *    注册的原子性同理：先写用户记录，再用 SET NX 抢邮箱；抢不到就回滚删掉用户。
  */
 import { pbkdf2, randomBytes, randomInt, createHash, timingSafeEqual } from 'node:crypto';
-import { rateLimit } from './kv.mjs';
-
-const PREFIX = 'bts:acct:';
-const K_EMAIL = (e) => PREFIX + 'email:' + e;
-const K_USER = (id) => PREFIX + 'user:' + id;
-const K_SESS = (h) => PREFIX + 'sess:' + h;
-const K_FAIL = (e) => PREFIX + 'fail:' + e;
-const K_RESET = (e) => PREFIX + 'reset:' + e;
-const K_RATE = (s) => PREFIX + 'rate:' + s;
+import { kvPrefix, rateLimit } from './kv.mjs';
 
 /**
  * PBKDF2 迭代数。
@@ -117,7 +109,16 @@ const readJson = (raw, fb = null) => { try { return raw ? JSON.parse(raw) : fb; 
  * @param {object} [o.env]    环境变量（SMTP_TEST_MODE / SERVICE_NAME 等）
  * @param {Array} [o.sent]    测试用：收集发出的邮件
  */
-export function createAccounts({ kv, mail, env = process.env, sent }) {
+export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
+  // 前缀由调用方注入（默认取 KV_PREFIX）：账号是本项目与姊妹项目**最容易串库**的一块，
+  // 详见 kv.mjs 里 kvPrefix 的说明。
+  const PREFIX = String(prefix === undefined ? kvPrefix(env) : prefix) + 'acct:';
+  const K_EMAIL = (e) => PREFIX + 'email:' + e;
+  const K_USER = (id) => PREFIX + 'user:' + id;
+  const K_SESS = (h) => PREFIX + 'sess:' + h;
+  const K_FAIL = (e) => PREFIX + 'fail:' + e;
+  const K_RESET = (e) => PREFIX + 'reset:' + e;
+  const K_RATE = (s) => PREFIX + 'rate:' + s;
   /** 发验证码失败的统一兜底文案 */
   const MAIL_FAIL = '邮件发送失败，请稍后重试或联系管理员';
   /**

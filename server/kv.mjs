@@ -130,3 +130,23 @@ export async function rateLimit(kv, key, windowSec, max) {
     return { count: 0, over: false, failed: true };
   }
 }
+
+/**
+ * 本应用的 Redis 键前缀 —— **单一事实源**。
+ *
+ * 为什么必须有：这个项目的账号与云同步模块是从姊妹项目「回译本」搬过来的，
+ * 两份代码里的前缀一模一样（都是 `bts:acct:` / `bts:sync:`）。也就是说，
+ * 两个应用**共用同一个 Upstash 库时会在同一个命名空间里读写**：
+ *   · 同一个邮箱在 A 注册过，B 就注册不了（或直接登录进了 A 的账号）；
+ *   · 账号记录里存着同步码 —— 串库之后两个应用会去读写同一份快照文档，
+ *     而两边的快照结构完全不同，合并时会把对方的数据清掉。
+ * 实测过键名：任务键原本就是分开的（vb:job: / bts:job:），只有账号和同步是重合的。
+ *
+ * 所以把命名空间收到一处、由 KV_PREFIX 决定，默认 `vb:`。
+ * 想和别的应用合用同一个库，只要两边的 KV_PREFIX 不同即可（也可以留空表示不分前缀）。
+ */
+export function kvPrefix(env = process.env) {
+  const raw = env && env.KV_PREFIX;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 'vb:';
+  return String(raw).trim();
+}

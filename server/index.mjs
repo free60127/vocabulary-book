@@ -20,7 +20,7 @@ import { promises as dnsLookup } from 'node:dns';
 import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
 import { sanitizeEntry, sanitizeQuiz, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
-import { createUpstashKv, createFileKv } from './kv.mjs';
+import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
 import { createAccounts } from './accounts.mjs';
 import { sendMail } from './mailer.mjs';
@@ -45,11 +45,14 @@ loadEnv();
 const PORT = Number(process.env.PORT || 8790);
 const HOSTED = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
 const dataDir = process.env.DATA_DIR || path.join(ROOT, 'data');
+/* 本应用在 KV/Redis 里的命名空间。默认 vb: —— 与姊妹项目回译本（写死 bts:）天然分开，
+   详见 kv.mjs 里 kvPrefix 的说明（账号与同步共用一个库时会串数据）。 */
+const KV_PREFIX = kvPrefix(process.env);
 const kv = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
   ? createUpstashKv({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN })
   : createFileKv(dataDir);
 const kvDurable = kv.kind !== 'file';
-const syncStore = createSyncStore(dataDir);
+const syncStore = createSyncStore(dataDir, { prefix: KV_PREFIX });
 const syncDurable = syncStore.kind !== 'file';
 
 /* ---------- API Key 归一化 ----------
@@ -188,7 +191,7 @@ function sweepRateBuckets(now) {
 setInterval(() => sweepRateBuckets(Date.now()), 60_000).unref();
 
 /* 每日预算闸门（实现在 server/budget.mjs，那里有完整的设计说明与测试） */
-const budget = createBudget({ kv, limit: DAILY_JOB_LIMIT });
+const budget = createBudget({ kv, limit: DAILY_JOB_LIMIT, prefix: KV_PREFIX });
 
 function rateLimited(req, bucketKey = '', max = RATE_MAX) {
   const now = Date.now();
@@ -223,7 +226,7 @@ function releaseJobSlot() {
 }
 
 /* ---------- 任务生命周期 ---------- */
-const JOB_PREFIX = 'vb:job:';
+const JOB_PREFIX = KV_PREFIX + 'job:';
 const JOB_TTL_DAYS = Number(process.env.JOB_TTL_DAYS || 30);
 const JOB_TTL_SEC = Math.max(60, Math.round(JOB_TTL_DAYS * 86400));
 const JOB_MAX_COUNT = Number(process.env.JOB_MAX_COUNT || 2000);
@@ -564,7 +567,7 @@ function recordClientError(entry) {
 }
 
 const accountsOn = kvDurable;
-const accounts = accountsOn ? createAccounts({ kv, mail: sendMail }) : null;
+const accounts = accountsOn ? createAccounts({ kv, mail: sendMail, prefix: KV_PREFIX }) : null;
 
 const server = http.createServer(async (req, res) => {
   applyCors(req, res);
