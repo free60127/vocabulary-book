@@ -3,7 +3,7 @@ import {
   BookMarked, ChevronRight, Cloud, Flame, FolderPlus, LoaderCircle, LogIn,
   PanelLeftClose, PanelLeftOpen, Search, Settings, Sparkles, Trash2, Volume2, X,
 } from 'lucide-react'
-import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob } from './api.js'
+import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, pullCloudSync, pushCloudSync } from './api.js'
 import {
   POLL_LOOKUP_MS, POLL_QUIZ_MS, TIMEOUT_LOOKUP_MS, TIMEOUT_QUIZ_MS, POLL_MAX_FAILURES,
   TIP_LONG_MS, TIP_NORMAL_MS,
@@ -23,7 +23,7 @@ import {
 import { GRADE_KEYS, GRADES, addStudyDay, dueEntries, gradeHint, scheduleOf, sm2Review, summarizeStreak } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
 import { speak } from './speak.js'
-import { loadSyncCode, loadSyncMeta, newSyncCode, saveSyncCode, saveSyncMeta, syncOnce } from './sync.js'
+import { deviceId, loadSyncCode, loadSyncMeta, newSyncCode, saveSyncCode, saveSyncMeta, syncOnce } from './sync.js'
 import {
   authConfig, bindSyncCode, changePassword as apiChangePassword, deleteAccount as apiDelete,
   fetchMe, forgot as apiForgot, loadToken, loadUser, pullSyncCode, resetPassword as apiReset,
@@ -351,17 +351,74 @@ export default function App() {
       // 请求在飞的这段时间里用户可能又存了词条 —— 直接写回会把它们抹掉（回译本上实测过）。
       const settled = mergeSnapshot(localRef.current, res.merged)
       applyMerged(settled)
-      const meta = { ...loadSyncMeta(), lastSyncAt: Date.now(), version: res.version }
-      saveSyncMeta(meta); setSyncMeta(meta)
       const a = settled.added || {}
-      if (manual) setSyncTip((a.booksAdded || a.entriesAdded) ? `同步完成：新增 ${a.booksAdded} 个本子、${a.entriesAdded} 个词条` : '同步完成：已是最新')
-      else if (a.booksAdded || a.entriesAdded) flash('已从云端同步到新内容', TIP_LONG_MS)
+      const mine = { books: (settled.books || []).length, entries: (settled.books || []).reduce((n, b) => n + ((b.entries || []).length), 0) }
+      const meta = {
+        ...loadSyncMeta(), lastSyncAt: Date.now(), version: res.version,
+        // 记下双方的数量：这是排查"为什么没同步过来"时唯一有用的两个数字，
+        // 以前界面上一个都没有，只能靠猜（这次就吃了这个亏）
+        localBooks: mine.books, localEntries: mine.entries,
+        cloudBeforeBooks: res.cloudBefore ? res.cloudBefore.books : undefined,
+        cloudBeforeEntries: res.cloudBefore ? res.cloudBefore.entries : undefined,
+        pushedBooks: res.pushed ? res.pushed.books : undefined,
+        pushedEntries: res.pushed ? res.pushed.entries : undefined,
+      }
+      saveSyncMeta(meta); setSyncMeta(meta)
+      const localPart = `本机 ${mine.books} 个本子（${mine.entries} 个词条）`
+      if (manual) {
+        if (a.booksAdded || a.entriesAdded) setSyncTip(`同步完成：从云端新增 ${a.booksAdded} 个本子、${a.entriesAdded} 个词条 · ${localPart}`)
+        else if (res.cloudBefore && res.cloudBefore.books === 0 && mine.books > 0) {
+          // 本机有数据、云端却是空的 —— 这多半不是"已是最新"，而是哪里没对上，
+          // 必须说出来（并给出"用本机数据覆盖云端"这条出路），不能粉饰成一句"已是最新"
+          setSyncTip(`注意：云端这串码里是空的，本机有 ${mine.books} 个本子。已把本机数据推送上去；`
+            + '若另一台设备仍看不到，请在那台设备上点「立即同步」。')
+        } else setSyncTip(`同步完成：已是最新 · ${localPart}`)
+      } else if (a.booksAdded || a.entriesAdded) flash('已从云端同步到新内容', TIP_LONG_MS)
     } catch (e) {
       setSyncTip('同步失败：' + (e.message || '网络错误'))
     } finally {
       syncBusyRef.current = false; setSyncBusy(false)
     }
   }, [syncCode, applyMerged, flash])
+
+  /**
+   * 用本机数据**覆盖**云端（不做合并）。
+   * 这是同步类工具的标配逃生口：合并逻辑一旦有一边不对劲（比如云端那串码被写成了空壳），
+   * 用户就完全没有办法把数据推上去 —— 只能换码重来，等于把另一台设备的数据也丢了。
+   */
+  const forcePush = async () => {
+    if (!syncCode) { setSyncTip('还没有同步码'); return }
+    const mine = { books: (localRef.current.books || []).length, entries: (localRef.current.books || []).reduce((n, b) => n + ((b.entries || []).length), 0) }
+    if (!window.confirm(`用本机数据覆盖云端？
+
+本机：${mine.books} 个本子（${mine.entries} 个词条）
+`
+      + '云端原有内容会被本机这份替换（另一台设备的旧数据不再保留，但两台设备各自的浏览器里仍有本地副本）。')) return
+    if (syncBusyRef.current) return
+    syncBusyRef.current = true; setSyncBusy(true); setSyncTip('正在上传本机数据…')
+    try {
+      const head = await pullCloudSync(syncCode).catch((e) => (e && e.status === 404
+        ? { version: 0, data: {} }
+        : Promise.reject(e)))
+      const snap = localRef.current
+      const r = await pushCloudSync(syncCode, {
+        baseVersion: Number(head.version) || 0,
+        device: deviceId(),
+        data: {
+          books: snap.books || [], review: snap.review || {}, days: snap.days || [],
+          history: snap.history || [], deletedBooks: snap.deletedBooks || [], deletedEntries: snap.deletedEntries || [],
+        },
+      })
+      if (!r.ok) { setSyncTip('覆盖失败：' + ((r.data && r.data.error) || ('HTTP ' + r.status))); return }
+      const meta = { ...loadSyncMeta(), lastSyncAt: Date.now(), version: r.data.version, localBooks: mine.books, localEntries: mine.entries }
+      saveSyncMeta(meta); setSyncMeta(meta)
+      setSyncTip(`已用本机数据覆盖云端：${mine.books} 个本子、${mine.entries} 个词条。另一台设备点「立即同步」即可拿到。`)
+    } catch (e) {
+      setSyncTip('覆盖失败：' + (e.message || '网络错误'))
+    } finally {
+      syncBusyRef.current = false; setSyncBusy(false)
+    }
+  }
 
   const startNewSync = async () => {
     if (syncBusyRef.current) { setSyncTip('正在同步中，请稍候'); return }
@@ -734,8 +791,8 @@ export default function App() {
           onExport={exportBackup} onImport={importBackup}
           syncCode={syncCode} syncTip={syncTip} syncBusy={syncBusy} syncMeta={syncMeta}
           onNewCode={startNewSync} onUseCode={useExistingCode} onCopyCode={copySyncCode}
-          onStopSync={stopSync} onSyncNow={() => runSync(true)}
-          account={account} accountHasSync={accountHasSync}
+          onStopSync={stopSync} onSyncNow={() => runSync(true)} onForcePush={forcePush}
+          account={account} accountHasSync={accountHasSync} localSnapshot={local}
           onOpenAuth={() => setAuthOpen(true)} onBindSync={doBindSync} onPullSync={doPullSync} />
       ) : null}
 

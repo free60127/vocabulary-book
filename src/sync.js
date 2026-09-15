@@ -64,6 +64,10 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
   }
 
   let baseVersion = Number(remote.version) || 0;
+  const cloudBefore = {
+    books: (remote.data && remote.data.books || []).length,
+    entries: ((remote.data && remote.data.books) || []).reduce((n, b) => n + ((b.entries || []).length), 0),
+  };
   let payload = mergeSnapshot(local, remote.data);
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -80,7 +84,18 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
         deletedEntries: payload.deletedEntries || [],
       },
     });
-    if (r.ok) return { ok: true, version: r.data.version, merged: payload, added: payload.added, recovered };
+    if (r.ok) {
+      return {
+        ok: true, version: r.data.version, merged: payload, added: payload.added, recovered,
+        // 把"这次到底推上去了多少"如实回报 —— 云端空、本机也空的时候，
+        // 界面只显示"同步完成"会让人以为一切正常（用户就是这么被坑了一轮）。
+        cloudBefore,
+        pushed: {
+          books: (payload.books || []).length,
+          entries: (payload.books || []).reduce((n, b) => n + ((b.entries || []).length), 0),
+        },
+      };
+    }
     if (r.status === 409 && r.data) {
       // 其它设备抢先写了：拿云端最新数据重新合并后再推
       baseVersion = Number(r.data.version) || 0;

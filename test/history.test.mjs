@@ -23,7 +23,7 @@ globalThis.localStorage = {
 
 const {
   HISTORY_KEY, HISTORY_LIMIT, HISTORY_BYTES, HISTORY_ITEM_BYTES, makeHistoryItem, mergeHistory,
-  pushHistory, loadHistory, saveHistory,
+  pushHistory, loadHistory, saveHistory, mergeSnapshot,
 } = await import('../src/storage.js');
 const { sanitizeSnapshot } = await import('../server/sync.mjs');
 
@@ -108,6 +108,32 @@ const bytes = (v) => JSON.stringify(v).length;
   check('都没有 at 时退化成原来的"本机优先"', mergeHistory([{ id: 'a', head: 'L' }], [{ id: 'a', head: 'R' }])[0].head === 'L');
   check('合并结果同样受条数上限约束',
     mergeHistory(Array.from({ length: 80 }, (_, i) => ({ id: 'x' + i, at: i })), []).length === HISTORY_LIMIT);
+}
+
+/* ---------- 墓碑不该误伤"还活着的"数据（同步推空的那类故障）----------
+   线上出过一次"本机明明有 1 个本子，云端却一直是空的"：合并时被删除墓碑过滤掉，
+   而界面只显示"同步完成"，看不出来。所以把"该留的留、该删的删"逐条钉死。 */
+{
+  const book = { id: 'bk-live', name: '英语文摘2026', note: '', createdAt: 1, entries: [{ id: 'wb-live', head: 'incumbent', meanings: [{ cn: '现任的' }], createdAt: 1 }] };
+  const empty = { books: [], review: {}, days: [], history: [], deletedBooks: [], deletedEntries: [] };
+
+  const normal = mergeSnapshot({ ...empty, books: [book] }, empty);
+  check('没有墓碑时，本机数据原样进合并结果', normal.books.length === 1 && normal.books[0].entries.length === 1);
+
+  const tombBook = mergeSnapshot({ ...empty, books: [book], deletedBooks: ['bk-live'] }, empty);
+  check('本子被自己的删除标记挡住 → 合并结果为空（这就是"推上去是空的"的成因）',
+    tombBook.books.length === 0, `${tombBook.books.length} 个本子`);
+
+  const tombEntry = mergeSnapshot({ ...empty, books: [book], deletedEntries: ['bk-live|wb-live'] }, empty);
+  check('词条墓碑只删那一条词条，不牵连整个本子',
+    tombEntry.books.length === 1 && tombEntry.books[0].entries.length === 0);
+
+  // 其它本子的墓碑不能误伤这一本
+  const other = mergeSnapshot({ ...empty, books: [book], deletedBooks: ['bk-other', 'bk-another'] }, empty);
+  check('别的本子的墓碑不会误伤本机这本', other.books.length === 1, `${other.books.length} 个本子`);
+
+  // 墓碑也跟着同步出去（否则别的设备会把删掉的并回来）
+  check('墓碑会随快照一起推给云端', tombBook.deletedBooks.includes('bk-live') && tombEntry.deletedEntries.includes('bk-live|wb-live'));
 }
 
 /* ---------- 服务端快照：历史里的快照也要清洗 ---------- */

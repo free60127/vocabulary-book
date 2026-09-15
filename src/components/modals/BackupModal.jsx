@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
+import { mergeSnapshot } from '../../storage.js';
 
 /**
  * 备份与恢复：本机导出/导入 + 云同步（同步码）。
@@ -11,8 +12,8 @@ import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
  */
 export default function BackupModal({
   onClose, summary, onExport, onImport,
-  syncCode, syncTip, syncBusy, onNewCode, onUseCode, onCopyCode, onStopSync, onSyncNow,
-  syncMeta, account, accountHasSync, onOpenAuth, onBindSync, onPullSync,
+  syncCode, syncTip, syncBusy, onNewCode, onUseCode, onCopyCode, onStopSync, onSyncNow, onForcePush,
+  syncMeta, account, accountHasSync, onOpenAuth, onBindSync, onPullSync, localSnapshot,
 }) {
   const [codeInput, setCodeInput] = useState('');
   const [binding, setBinding] = useState(false);   // 是否展开"输入密码以绑定同步码"
@@ -46,6 +47,29 @@ export default function BackupModal({
 
         <div className="sync-block">
           <div className="sync-title"><Cloud size={15} />云同步（多设备）</div>
+          {/* 自检：把"本机实际会推上去多少"算出来。
+              同步出问题时最要命的是**看不见**——本机明明有 1 个本子，云端却是空的，
+              光看"同步完成"四个字完全无从判断。这里把三个数字并排摆出来：
+              本机有几条 → 实际会推几条 → 有多少被删除墓碑挡住（差值就是原因）。 */}
+          {localSnapshot ? (() => {
+            const count = (books) => ({
+              books: (books || []).length,
+              entries: (books || []).reduce((n, b) => n + ((b.entries || []).length), 0),
+            });
+            const mine = count(localSnapshot.books);
+            const would = count(mergeSnapshot(localSnapshot, {
+              books: [], review: {}, days: [], history: [], deletedBooks: [], deletedEntries: [],
+            }).books);
+            const tombs = { books: (localSnapshot.deletedBooks || []).length, entries: (localSnapshot.deletedEntries || []).length };
+            const blocked = mine.books - would.books;
+            return (
+              <p className="muted small" style={{ margin: '0 0 8px' }}>
+                本机 <b>{mine.books}</b> 个本子（{mine.entries} 个词条） · 实际会推送 <b>{would.books}</b> 个本子（{would.entries} 个词条）
+                {blocked > 0 ? <span className="warn-text"> · ⚠️ 有 {blocked} 个本子被删除标记挡住了，不会同步</span> : null}
+                {tombs.books || tombs.entries ? <span> · 删除标记：{tombs.books} 个本子 / {tombs.entries} 个词条</span> : null}
+              </p>
+            );
+          })() : null}
           {syncCode ? (
             <>
               <div className="sync-row">
@@ -56,8 +80,21 @@ export default function BackupModal({
                 在另一台设备的这一栏里粘贴这串码即可双向同步。
                 {syncMeta && syncMeta.lastSyncAt ? ` 上次同步：${new Date(syncMeta.lastSyncAt).toLocaleString()}` : ' 还没同步过。'}
               </p>
+              {/* 同步出问题时，用户唯一能自己判断的就是"两边各有多少" ——
+                  以前界面上一个数字都没有，只能看到一句"同步完成"，于是"手机没同步到"
+                  既看不出原因、也不知道该点哪儿。这里把两个数摆出来。 */}
+              {syncMeta && syncMeta.lastSyncAt ? (
+                <p className="muted small" style={{ margin: '2px 0 0' }}>
+                  本机 <b>{syncMeta.localEntries != null ? `${syncMeta.localBooks} 个本子（${syncMeta.localEntries} 个词条）` : '—'}</b>
+                  {' · 同步前云端 '}
+                  <b>{syncMeta.cloudBeforeEntries != null ? `${syncMeta.cloudBeforeBooks} 个本子（${syncMeta.cloudBeforeEntries} 个词条）` : '—'}</b>
+                </p>
+              ) : null}
               <div className="modal-actions">
                 <button className="ghost-btn" onClick={onSyncNow} disabled={syncBusy}>{syncBusy ? '同步中…' : '立即同步'}</button>
+                {/* 逃生口：合并逻辑一旦有一边不对劲（例如云端那串码被写成了空壳），
+                    没有这个按钮用户就只能换码重来，等于把另一台设备的数据一起丢掉。 */}
+                <button className="ghost-btn" onClick={onForcePush} disabled={syncBusy} title="不做合并，直接用本机这份替换云端">用本机覆盖云端</button>
                 <button className="ghost-btn" onClick={onNewCode} disabled={syncBusy}>换码</button>
                 <button className="ghost-btn" onClick={onStopSync} disabled={syncBusy}>停用</button>
               </div>
