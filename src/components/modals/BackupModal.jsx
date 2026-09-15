@@ -12,11 +12,13 @@ import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
 export default function BackupModal({
   onClose, summary, onExport, onImport,
   syncCode, syncTip, syncBusy, onNewCode, onUseCode, onCopyCode, onStopSync, onSyncNow,
-  syncMeta, account, accountHasSync, onOpenAuth, onBindSync,
+  syncMeta, account, accountHasSync, onOpenAuth, onBindSync, onPullSync,
 }) {
   const [codeInput, setCodeInput] = useState('');
   const [binding, setBinding] = useState(false);   // 是否展开"输入密码以绑定同步码"
   const [bindPw, setBindPw] = useState('');
+  const [pulling, setPulling] = useState(false);   // 是否展开"从账号取回同步码"
+  const [pullPw, setPullPw] = useState('');
   const [importErr, setImportErr] = useState('');
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -73,13 +75,32 @@ export default function BackupModal({
           )}
           {syncTip ? <div className="muted small" role="status" aria-live="polite">{syncTip}</div> : null}
 
-          <div className="sync-row" style={{ marginTop: 10 }}>
+          <div className="sync-row" style={{ marginTop: 10, flexDirection: 'column', alignItems: 'stretch' }}>
             {account && account.email ? (
               <>
-                <span className="muted small">已登录：{account.email}</span>
+                <div className="sync-row">
+                  <span className="muted small">已登录：{account.email}</span>
+                  {/* 状态要**说清楚现在处于哪一步**，不能只显示"已登录"。
+                      用户实际踩到的坑：手机上登录了同一个账号却什么都没同步 ——
+                      因为账号里当时压根没有同步码，而界面没告诉他下一步该干嘛。 */}
+                  {syncCode
+                    ? <span className="muted small">{accountHasSync ? '· 本机同步码已存进账号 ✓' : '· 本机同步码还没存进账号'}</span>
+                    : <span className="warn-text small">{accountHasSync ? '· 账号里有同步码，本机还没有 → 点右边「从账号取回」' : '· 账号里还没有同步码'}</span>}
+                  {syncCode ? (
+                    binding ? null : (
+                      <button className="ghost-btn sm" onClick={() => { setBinding(true); setPulling(false); }} disabled={syncBusy}>
+                        {accountHasSync ? '重新存入' : '把同步码存到账号'}
+                      </button>
+                    )
+                  ) : null}
+                  {!syncCode && accountHasSync && !pulling ? (
+                    <button className="primary-btn sm" onClick={() => { setPulling(true); setBinding(false); }} disabled={syncBusy}>从账号取回同步码</button>
+                  ) : null}
+                </div>
+
                 {binding ? (
-                  <>
-                    {/* 同步码要在**本地**用账号密码加密后才发出去（服务端只存密文，它自己也解不开），
+                  <div className="sync-row">
+                    {/* 同步码要在**本地**用账号密码加密后才发出去（服务端只存密文、它自己也解不开），
                         所以这一步必须问用户要密码 —— 不是多余的一步。 */}
                     <input className="fav-search" type="password" autoComplete="current-password"
                       placeholder="账号密码（用来加密同步码）" value={bindPw}
@@ -87,10 +108,26 @@ export default function BackupModal({
                     <button className="primary-btn sm" disabled={syncBusy || !bindPw}
                       onClick={() => { onBindSync(bindPw); setBindPw(''); setBinding(false); }}>确认存入</button>
                     <button className="ghost-btn sm" onClick={() => { setBinding(false); setBindPw(''); }}>取消</button>
-                  </>
-                ) : (
-                  <button className="ghost-btn sm" onClick={() => setBinding(true)} disabled={!syncCode || syncBusy}>把同步码存到账号</button>
-                )}
+                  </div>
+                ) : null}
+
+                {pulling ? (
+                  <div className="sync-row">
+                    <input className="fav-search" type="password" autoComplete="current-password"
+                      placeholder="账号密码（用来解开同步码）" value={pullPw}
+                      onChange={(e) => setPullPw(e.target.value)} disabled={syncBusy} />
+                    <button className="primary-btn sm" disabled={syncBusy || !pullPw}
+                      onClick={() => { onPullSync(pullPw); setPullPw(''); setPulling(false); }}>确认取回</button>
+                    <button className="ghost-btn sm" onClick={() => { setPulling(false); setPullPw(''); }}>取消</button>
+                  </div>
+                ) : null}
+
+                {!syncCode && !accountHasSync ? (
+                  <p className="muted small" style={{ margin: 0 }}>
+                    账号里还没有同步码。请在**有数据的那台设备**上打开本页并登录一次 ——
+                    它会自动把同步码加密存进账号，然后回到这台设备点「从账号取回同步码」。
+                  </p>
+                ) : null}
               </>
             ) : (
               <>

@@ -87,6 +87,22 @@ export async function fetchMe(token) {
   return r.ok ? { ...r, hasSync: isBox(r.sync) } : r;
 }
 
+/**
+ * 从账号里**取回**同步码（这台设备已经登录、但本机还没有码时用）。
+ *
+ * 为什么不复用 signIn：用户可能早就登录了（令牌还在），这时再走一次登录既多余、
+ * 又会把旧会话换掉。这个函数就地读回密文、用密码解开。
+ * @returns {{ok:true, syncCode:string}|{ok:false, error:string}}
+ */
+export async function pullSyncCode(token, password) {
+  const r = await call('me', {}, token);
+  if (!r.ok) return { ok: false, error: r.error || '读取账号失败，请重新登录' };
+  if (!isBox(r.sync)) return { ok: false, error: '账号里还没有同步码 —— 请先在**有数据的那台设备**上登录一次（它会自动存进去），或在那台设备点「把同步码存到账号」' };
+  const plain = await openText(r.sync, password);
+  if (!plain) return { ok: false, error: '密码不对，或这串码是用旧密码加密的（改过密码的话需要在原设备重新存一次）' };
+  return { ok: true, syncCode: plain };
+}
+
 /** 把当前同步码加密后存进账号（换设备/首次绑定时用）。密码必须是**账号密码** */
 export async function bindSyncCode(token, syncCode, password) {
   const box = await sealSync(syncCode, password);

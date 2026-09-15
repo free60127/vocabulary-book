@@ -974,3 +974,7 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
   .dict-facts > div { flex-direction: column; gap: 2px; }
   .dict-facts dt { width: auto; text-align: left; }
 }
+
+/* 云同步里"这件事还没完成"的状态文案（例如：账号里有码、本机还没有）。
+   用金色而不是红色 —— 它不是错误，是一个待办，别把用户吓一跳。 */
+.warn-text { color: #8a5a00; }

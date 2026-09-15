@@ -26,8 +26,8 @@ import { speak } from './speak.js'
 import { loadSyncCode, loadSyncMeta, newSyncCode, saveSyncCode, saveSyncMeta, syncOnce } from './sync.js'
 import {
   authConfig, bindSyncCode, changePassword as apiChangePassword, deleteAccount as apiDelete,
-  fetchMe, forgot as apiForgot, loadToken, loadUser, resetPassword as apiReset, saveToken,
-  saveUser, signIn, signOut as apiSignOut, signOutAll as apiSignOutAll, signUp,
+  fetchMe, forgot as apiForgot, loadToken, loadUser, pullSyncCode, resetPassword as apiReset,
+  saveToken, saveUser, signIn, signOut as apiSignOut, signOutAll as apiSignOutAll, signUp,
 } from './account.js'
 import EntryCard from './components/EntryCard.jsx'
 import QuizPane from './components/QuizPane.jsx'
@@ -402,6 +402,7 @@ export default function App() {
     const token = r.token || (account && account.token) || ''
     const email = r.email || (r.user && r.user.email) || (account && account.email) || ''
     setAccount({ token, email }); saveToken(token); saveUser({ email })
+    setAccountHasSync(Boolean(r.hasSync))
     setAuthOpen(false); setAuthTip('')
 
     if (r.syncError) {
@@ -417,11 +418,14 @@ export default function App() {
       flash('已登录：' + email)
       return
     }
-    // 账号里没存过同步码（首次登录 / 老账号）：**立刻把本机这串绑上去**。
-    // 不绑的话这台设备会一直用自己的码，和别的设备永远碰不上面。
+    // 账号里没存过同步码（首次登录 / 老账号）：
+    //  · 本机有码 → **立刻绑上去**。不绑的话这台设备会一直用自己的码，和别的设备永远碰不上面；
+    //  · 本机也没码（新设备先登录）→ 明确告诉用户下一步该做什么，别让他对着"已登录"发呆。
     if (syncCode && password) {
       const b = await bindSyncCode(token, syncCode, password)
       setSyncTip(b.ok ? '已把本机同步码存进账号 —— 换设备登录后会自动带回来' : ('同步码保存失败：' + (b.error || '')))
+    } else if (!syncCode) {
+      setSyncTip('这台设备还没有同步码。请先在**有数据的那台设备**上登录一次（会自动把码存进账号），再回到这里点「从账号取回同步码」。')
     }
     flash('已登录：' + email)
   }, [account, flash, runSync, syncCode])
@@ -475,6 +479,24 @@ export default function App() {
     setSyncTip(r.ok ? '同步码已加密存进账号 —— 换设备登录后会自动带回来' : ('保存失败：' + (r.error || '')))
     setSyncBusy(false)
   }
+  /**
+   * 从账号把同步码取回来（已登录、但本机还没码时用）。
+   * 用户实际踩到的场景：手机上登录了同一个账号，却什么都没有同步 ——
+   * 因为**账号里当时压根没有同步码**（那台有数据的设备还没把码存进去），
+   * 而界面只会显示"已登录"，没有任何下一步提示。现在有这条明确路径 + 明确文案。
+   */
+  const doPullSync = async (password) => {
+    if (!password) { setSyncTip('请填写账号密码（同步码是用它加密的，只有你能解开）'); return }
+    setSyncBusy(true)
+    const r = await pullSyncCode(account.token, password)
+    if (r.ok) {
+      saveSyncCode(r.syncCode); setSyncCode(r.syncCode)
+      setSyncTip('已从账号取回同步码，正在同步…')
+      await runSync(true, r.syncCode)
+    } else setSyncTip(r.error || '取回失败')
+    setSyncBusy(false)
+  }
+
   /* 改密码：**同时用新密码重新加密同步码**，否则别的设备再也解不开 */
   const doChangePassword = async (oldPassword, newPassword) => {
     setAuthBusy(true)
@@ -498,13 +520,20 @@ export default function App() {
         setAccount({ token, email }); saveUser({ email })
         // 这里**不能**把 r.sync 当同步码用：那是密文，解它需要账号密码（启动时没有）。
         // 只记下"账号里有码"这个事实，界面上提示用户登录一次即可自动取回。
-        setAccountHasSync(Boolean(r.hasSync))
+        const hasSync = Boolean(r.hasSync)
+        setAccountHasSync(hasSync)
+        // 静默失败最伤人：已登录、本机有码、账号里却没有 —— 用户会以为"登录了就该自动同步"，
+        // 实际换设备时什么都拿不到（用户就是这么踩到的）。给一句明确的下一步，别让他自己猜。
+        if (!hasSync && loadSyncCode()) {
+          flash('换设备同步还差一步：打开「备份/同步」→「把同步码存到账号」（需要账号密码）', TIP_LONG_MS * 2)
+        }
       } else {
         // 令牌失效（改过密码 / 被踢）：清掉，免得后续请求一直 401
         saveToken(''); saveUser({}); setAccount({ token: '', email: '' })
       }
     })
-  }, [])
+    // flash 是 useCallback([]) —— 身份恒定，放进依赖只是为了让 exhaustive-deps 满意
+  }, [flash])
 
   /* 打开页面自动同步一次（有码才跑） */
   const bootSyncedRef = useRef(false)
@@ -707,7 +736,7 @@ export default function App() {
           onNewCode={startNewSync} onUseCode={useExistingCode} onCopyCode={copySyncCode}
           onStopSync={stopSync} onSyncNow={() => runSync(true)}
           account={account} accountHasSync={accountHasSync}
-          onOpenAuth={() => setAuthOpen(true)} onBindSync={doBindSync} />
+          onOpenAuth={() => setAuthOpen(true)} onBindSync={doBindSync} onPullSync={doPullSync} />
       ) : null}
 
       {authOpen ? (

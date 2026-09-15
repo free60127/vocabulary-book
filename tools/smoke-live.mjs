@@ -186,7 +186,59 @@ let status;
   ok('注销后确实登不上了', after.status >= 400, after.data?.error || `HTTP ${after.status}`);
 }
 
-/* ---------- 6) 越界与错误路径不能泄露文件 ---------- */
+/* ---------- 6) 多设备真实场景：账号里没码 → 另一台设备登录 → 数据到手 ----------
+   这一段还原用户实际踩到的场景（"手机登录了同一个账号，却什么都没同步"）。
+   顺序很关键：**先登录（此时账号里没码）**，再在设备 A 绑码，然后设备 B 登录取回。
+   如果只有"先绑码再登录"这一条路径，就会漏掉"先登录的那台设备永远接不上"这个真问题。 */
+{
+  const email = `multi-${Date.now().toString(36)}@example.com`;
+  const password = 'Multi-Device-2026!x';
+  const mk = async (path, opts) => req(path, opts);
+
+  // —— 设备 B：先登录（账号里此刻没有同步码）——
+  await mk('/api/auth/register', { method: 'POST', body: { email, password } });
+  const loginB0 = await mk('/api/auth/login', { method: 'POST', body: { email, password, device: 'phone' } });
+  const tokenB = loginB0.data?.token || '';
+  ok('设备 B 先登录：能正常拿到令牌', Boolean(tokenB), loginB0.data?.error || '');
+  ok('此时账号里没有同步码（正是用户遇到的状态）', !loginB0.data?.sync || !loginB0.data.sync.c, JSON.stringify(loginB0.data?.sync || null));
+
+  // —— 设备 A：有数据 → 生成码 → 写快照 → 把码加密存进账号 ——
+  const createdA = await mk('/api/sync/new', { method: 'POST' });
+  const codeA = createdA.data?.code || '';
+  const headA = await mk('/api/sync/' + codeA);
+  const putA = await mk('/api/sync/' + codeA, {
+    method: 'POST',
+    body: {
+      baseVersion: Number(headA.data?.version ?? 1), device: 'desktop',
+      data: {
+        books: [{ id: 'bA', name: '设备A的本子', note: '', createdAt: 1, entries: [{ id: 'wb-A', head: 'incumbent', brief: '现任的', meanings: [{ pos: '形容词', cn: '现任的' }], createdAt: 1 }] }],
+        review: {}, days: [], history: [], deletedBooks: [], deletedEntries: [],
+      },
+    },
+  });
+  ok('设备 A 上传了自己的数据', putA.status === 200, JSON.stringify(putA.data).slice(0, 80));
+  const sealedA = await sealLikeClient(codeA, password);
+  const bindA = await mk('/api/auth/sync', { method: 'POST', token: tokenB, body: { sync: sealedA } });
+  ok('设备 A 把同步码加密存进账号', bindA.status === 200 && bindA.data?.ok === true, bindA.data?.error || '');
+
+  // —— 设备 B：重新登录 → 应该能解出同步码 → 拉到设备 A 的数据 ——
+  const loginB1 = await mk('/api/auth/login', { method: 'POST', body: { email, password, device: 'phone' } });
+  const tokenB1 = loginB1.data?.token || '';
+  const box = loginB1.data?.sync;
+  ok('设备 B 再登录：服务端把密文还给了它', Boolean(box && box.c), JSON.stringify(box).slice(0, 50));
+  const opened = box ? await openLikeClient(box, password) : null;
+  ok('设备 B 用密码解开，拿到的就是设备 A 那串码（换设备免手抄）', opened === codeA, `${String(opened).slice(0, 12)} vs ${codeA.slice(0, 12)}`);
+  const pulled = await mk('/api/sync/' + opened);
+  ok('设备 B 拉到设备 A 的本子数据', pulled.status === 200 && JSON.stringify(pulled.data).includes('设备A的本子'), `HTTP ${pulled.status}`);
+  ok('设备 B 拿到的是**明文码**才可能拉对（密文当码用必然 404）',
+    opened !== JSON.stringify(box), '');
+
+  // 收尾
+  const del = await mk('/api/auth/delete-account', { method: 'POST', token: tokenB1, body: { password } });
+  ok('注销多设备测试账号', del.status === 200 && del.data?.ok === true, del.data?.error || '');
+}
+
+/* ---------- 7) 越界与错误路径不能泄露文件 ---------- */
 {
   for (const p of ['/%2e%2e%2fpackage.json', '/.env', '/server/index.mjs']) {
     const r = await fetch(BASE + p, { signal: AbortSignal.timeout(20000) });

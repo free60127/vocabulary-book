@@ -133,6 +133,27 @@ const PW = 'My-Password-2026!';
   check('旧密码解不开新密文（确认真的换了密钥）', (await openText(sent.sync, PW)) === null);
 }
 
+/* ---------- 从账号取回同步码（已登录但本机没码时的自救路径）---------- */
+{
+  const box = await sealText(SYNC, PW);
+  fetchScript = () => ({ status: 200, body: { ok: true, user: { email: 'a@b.com' }, sync: box } });
+  const r = await account.pullSyncCode('tk', PW);
+  check('能从账号取回并解开同步码', r.ok && r.syncCode === SYNC, r.error || r.syncCode);
+
+  const wrong = await account.pullSyncCode('tk', 'not-the-password');
+  check('密码不对时给出可操作的提示（不是"失败"两个字）',
+    wrong.ok === false && /密码不对|旧密码/.test(wrong.error || ''), wrong.error);
+
+  fetchScript = () => ({ status: 200, body: { ok: true, user: { email: 'a@b.com' } } });
+  const none = await account.pullSyncCode('tk', PW);
+  check('账号里没有同步码时，明确指向"去有数据的设备登录一次"',
+    none.ok === false && /有数据的那台设备/.test(none.error || ''), none.error);
+
+  fetchScript = () => ({ status: 401, body: { error: 'unauthorized' } });
+  const bad = await account.pullSyncCode('tk', PW);
+  check('令牌失效时提示重新登录', bad.ok === false && bad.error, bad.error);
+}
+
 /* ---------- 启动时校验令牌：只拿 hasSync，不碰密文 ---------- */
 {
   const box = await sealText(SYNC, PW);
