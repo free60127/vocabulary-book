@@ -32,6 +32,35 @@ export function entryLabel(entry) {
 }
 
 /**
+ * 规整"词典核对"块。
+ *
+ * 服务端已经清洗过一遍，这里为什么还要再来一次：这份数据还会从**导入的备份文件**和
+ * **云同步快照**回来 —— 那两个来源完全不可信（用户可以手改 JSON，别人可以构造快照）。
+ * 卡片渲染时会对 dict.senses 直接 .map、对 examTypes 直接 .join，
+ * 少一个校验就是一次白屏。所以照样逐字段重建。
+ */
+export function sanitizeDictBlock(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const S = (v, max) => String(v == null ? '' : v).slice(0, max);
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const ph = raw.phonetics && typeof raw.phonetics === 'object' ? raw.phonetics : {};
+  const out = {
+    source: S(raw.source, 40),
+    head: S(raw.head, 200),
+    phonetics: { uk: S(ph.uk, 120), us: S(ph.us, 120) },
+    perPosPhonetics: arr(raw.perPosPhonetics).filter((x) => x && typeof x === 'object').slice(0, 12)
+      .map((x) => ({ lang: x.lang === 'us' ? 'us' : 'uk', pos: S(x.pos, 20), phone: S(x.phone, 120) })),
+    senses: arr(raw.senses).filter((s) => s && typeof s === 'object').slice(0, 10)
+      .map((s) => ({ pos: S(s.pos, 20), cn: S(s.cn, 800) })),
+    examTypes: arr(raw.examTypes).filter((x) => typeof x === 'string').slice(0, 10),
+    forms: arr(raw.forms).filter((x) => typeof x === 'string').slice(0, 8),
+    phrases: arr(raw.phrases).filter((p) => p && typeof p === 'object').slice(0, 12)
+      .map((p) => ({ en: S(p.en, 200), cn: S(p.cn, 400) })),
+  };
+  return out.senses.length || out.examTypes.length || out.phonetics.uk || out.phonetics.us ? out : null;
+}
+
+/**
  * 规整一个词条（导入/同步来的也要过这一关）。
  * 没有 id 或 head 的返回 null —— 这种记录既没法合并也没法展示。
  */
@@ -42,7 +71,13 @@ export function sanitizeEntry(raw) {
   if (!id || !head) return null;
   const S = (v, max = 8000) => String(v == null ? '' : v).slice(0, max);
   const arr = (v) => (Array.isArray(v) ? v : []);
-  return {
+  const dict = sanitizeDictBlock(raw.dict);
+  const conflictsRaw = raw.dictConflicts && typeof raw.dictConflicts === 'object' ? raw.dictConflicts : null;
+  const conflicts = conflictsRaw ? {
+    phonetics: arr(conflictsRaw.phonetics).filter((x) => typeof x === 'string').slice(0, 3),
+    missingPos: arr(conflictsRaw.missingPos).filter((x) => typeof x === 'string').slice(0, 6),
+  } : null;
+  const out = {
     ...raw,
     id,
     head,
@@ -61,6 +96,11 @@ export function sanitizeEntry(raw) {
     examples: arr(raw.examples).filter((x) => x && typeof x === 'object'),
     createdAt: Number(raw.createdAt) || Date.now(),
   };
+  // 注意是用 delete 而不是置 undefined：`...raw` 可能已经带进来一份脏的 dict
+  // （手改过的备份文件、构造出来的同步快照），必须显式删掉而不是覆盖成 undefined。
+  if (dict) { out.dict = dict; out.dictConflicts = conflicts; }
+  else { delete out.dict; delete out.dictConflicts; }
+  return out;
 }
 
 /** 规整一个单词本 */

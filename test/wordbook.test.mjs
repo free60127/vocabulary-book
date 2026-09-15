@@ -9,8 +9,8 @@
  */
 import {
   allEntries, createBook, entryLabel, entryTombstoneKey, findEntryBook, mergeBooks,
-  newBookId, newEntryId, removeBook, removeEntry, renameBook, sanitizeBook, sanitizeEntry,
-  summarizeBooks, upsertEntry,
+  newBookId, newEntryId, removeBook, removeEntry, renameBook, sanitizeBook, sanitizeDictBlock,
+  sanitizeEntry, summarizeBooks, upsertEntry,
 } from '../src/wordbook.js';
 
 const results = [];
@@ -103,6 +103,23 @@ const ids = (list) => allEntries(list).map((e) => e.id);
   const s = summarizeBooks([B('b1', 'a', [E('w1', 'x'), E('w2', 'y', { kind: 'phrase' })]), B('b2', 'b', [E('w3', 'z', { kind: 'pattern' })])]);
   check('统计本子数/词条数/按类型分布', s.books === 2 && s.entries === 3 && s.byKind.phrase === 1 && s.byKind.pattern === 1, JSON.stringify(s));
   check('allEntries 带上所属本子信息', allEntries([B('b1', '我的本', [E('w1', 'x')])])[0].bookName === '我的本');
+
+  /* ---------- 词典核对块：备份文件/同步快照回来的是**不可信数据** ---------- */
+  check('词典块：正常数据保留', sanitizeDictBlock({ senses: [{ pos: 'n.', cn: '物体' }], examTypes: ['CET4'] }).senses.length === 1);
+  check('词典块：空壳丢掉', sanitizeDictBlock({}) === null && sanitizeDictBlock(null) === null && sanitizeDictBlock('x') === null);
+  const dirty = sanitizeDictBlock({
+    senses: 'not-an-array', examTypes: ['CET4', 5, null], phonetics: 'x',
+    perPosPhonetics: [{ lang: 'us', pos: 'n', phone: 'p' }, 'junk'],
+  });
+  check('词典块：字段类型不对也不会把渲染搞崩（.map/.join 的前置条件）',
+    Array.isArray(dirty.senses) && dirty.senses.length === 0 && dirty.examTypes.join() === 'CET4'
+    && dirty.phonetics.uk === '' && dirty.perPosPhonetics.length === 1, JSON.stringify(dirty.examTypes));
+  check('词典块：逐字段限长截断',
+    sanitizeDictBlock({ senses: [{ pos: 'n.', cn: 'x'.repeat(5000) }] }).senses[0].cn.length === 800);
+  const withDict = sanitizeEntry({ id: 'w1', head: 'object', dict: { senses: [{ pos: 'n.', cn: '物体' }] }, dictConflicts: { missingPos: ['v', 7] } });
+  check('词条带词典块时保留（含冲突）', withDict.dict.senses.length === 1 && withDict.dictConflicts.missingPos.join() === 'v');
+  const junkDict = sanitizeEntry({ id: 'w2', head: 'x', dict: 'garbage', dictConflicts: 'garbage' });
+  check('词条带着脏 dict 时整块丢掉（不能留半截给卡片去 .map）', junkDict.dict === undefined && junkDict.dictConflicts === undefined);
 }
 
 console.log('\n' + '='.repeat(62));

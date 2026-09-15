@@ -24,16 +24,19 @@ try {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = Number(process.env.E2E_PORT || 8811);
 const MOCK = Number(process.env.E2E_MOCK || 9811);
+const DICT_MOCK = Number(process.env.E2E_DICT_MOCK || 9812);
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 /* ---------- mock 模型：查词返回词条，出题返回题目 ---------- */
 const entryFor = (head) => ({
   head, kind: head.includes(' ') ? 'phrase' : 'word',
-  phonetic: '/ˈɒbdʒɪkt/', pos: '名词/动词', brief: '物体；反对',
+  // 故意给一个**错的**音标（重音位置错）和一个漏掉动词词性的 pos：
+  // 词典核对必须把它纠正过来，这正是"怕 AI 编"要防的那类错
+  phonetic: '/ɒbˈdʒekt/', pos: '名词', brief: '物体；反对',
   register: '通用', tone: '中性', strength: '中',
   meanings: [
+    // 只给名词：模型"漏掉动词词性"是很典型的一种不全，词典核对要能指出来
     { pos: '名词', cn: '物体、目标', en: 'a thing you can see and touch' },
-    { pos: '动词', cn: '反对', en: 'to say you disagree' },
   ],
   scenes: ['学术写作中表达不同意见', '日常描述实物'],
   avoid: '不要用它表示"拒绝"（那是 refuse）',
@@ -69,8 +72,34 @@ const mock = http.createServer((q, r) => {
 });
 await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
 
+/* ---------- mock 词典：故意和模型"说的不一样"，用来验证以词典为准 ---------- */
+const DICT_SAMPLE = {
+  ec: {
+    exam_type: ['初中', '高中', 'CET4', 'CET6', '考研'],
+    word: [{
+      ukphone: 'ˈɒbdʒɪkt; əbˈdʒekt', usphone: 'ˈɑːbdʒekt; əbˈdʒekt',
+      trs: [{ tr: [{ l: { i: ['n. 物体，实物；目的，目标'] } }] }, { tr: [{ l: { i: ['v. 反对'] } }] }],
+      'return-phrase': { l: { i: 'object' } },
+    }],
+  },
+  simple: {
+    query: 'object',
+    word: [{ 'return-phrase': 'object', multiPhone: { uk: [{ phone: 'ˈɒbdʒɪkt', pos: ['n'] }], us: [{ phone: 'ˈɑːbdʒekt', pos: ['n'] }] } }],
+  },
+  meta: { input: 'object' },
+};
+const dictMock = http.createServer((q, r) => {
+  r.writeHead(200, { 'Content-Type': 'application/json' });
+  r.end(JSON.stringify(DICT_SAMPLE));
+});
+await new Promise((r) => dictMock.listen(DICT_MOCK, '127.0.0.1', r));
+
 const server = spawn(process.execPath, ['server/index.mjs'], {
-  env: { ...process.env, PORT: String(PORT), AI_BASE_URL: `http://127.0.0.1:${MOCK}/v1`, AI_API_KEY: 'mock-e2e', ALLOW_PRIVATE_BASE_URL: '1' },
+  env: {
+    ...process.env, PORT: String(PORT), AI_BASE_URL: `http://127.0.0.1:${MOCK}/v1`, AI_API_KEY: 'mock-e2e', ALLOW_PRIVATE_BASE_URL: '1',
+    // 词典也指向本地 mock：e2e 不该依赖外网 —— 对方一抖动就红一片，还平白给人家刷请求
+    DICT_PROVIDER: 'youdao-web', DICT_BASE_URL: `http://127.0.0.1:${DICT_MOCK}`,
+  },
   stdio: 'ignore',
 });
 let up = false;
@@ -120,6 +149,23 @@ try {
   ok('近义词带"差别"', /差别/.test(card.synDiff || ''), card.synDiff || '');
   ok('例句带语境说明', Boolean(card.exampleNote), card.exampleNote || '');
   ok('卡片上有朗读按钮', card.speakBtns >= 1, String(card.speakBtns));
+
+  /* ---------- ①b 词典核对：模型给错音标/漏词性时，以词典为准 ---------- */
+  const dn = await page.evaluate(() => ({
+    badge: document.querySelector('.dict-badge')?.textContent.trim() || '',
+    warn: Boolean(document.querySelector('.dict-badge.warn')),
+    section: Boolean(document.querySelector('.dict-section')),
+    rows: [...document.querySelectorAll('.dict-facts > div')].map((d) => d.textContent.trim()),
+    phonetic: document.querySelector('.entry-card .phonetic')?.textContent.trim() || '',
+  }));
+  ok('卡片上有「词典核对」区块（用户最怕 AI 编，这个结论要第一眼看到）', dn.section && /已用有道词典核对/.test(dn.badge), dn.badge.slice(0, 60));
+  ok('模型音标错了 → 用词典的覆盖，并标出"已校正"',
+    dn.phonetic.includes('ˈɒbdʒɪkt') && !dn.phonetic.includes('ɒbˈdʒekt') && /音标已按词典校正/.test(dn.badge),
+    `${dn.phonetic} | ${dn.badge.slice(0, 50)}`);
+  ok('模型漏掉动词词性 → 提示词典还标了 v.', /词典还标了/.test(dn.badge) && /v/.test(dn.badge), dn.badge.slice(0, 80));
+  ok('词典原文照登（音标/释义/大纲标注）',
+    dn.rows.some((r) => /^英/.test(r)) && dn.rows.some((r) => /n\./.test(r) && /物体/.test(r)) && dn.rows.some((r) => /大纲/.test(r) && /CET6/.test(r)),
+    dn.rows.slice(0, 3).join(' | '));
 
   /* ---------- 加入单词本 ---------- */
   await page.locator('.save-bar button').click();
@@ -226,6 +272,7 @@ try {
   await browser.close();
   server.kill();
   mock.close();
+  dictMock.close();
 }
 
 console.log('\n' + '='.repeat(62));

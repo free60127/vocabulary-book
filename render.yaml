@@ -1,35 +1,67 @@
 # Render 一键部署配置（Render Blueprint）
-# 用法：https://render.com → New → Blueprint → 选择本仓库
-# 部署完成后得到 https://xxxx.onrender.com，把该链接发给别人即可打开同一个页面。
+#
+# 用法：https://dashboard.render.com → New → Blueprint → 选本仓库 → 它会读这个文件。
+# 部署完成后得到 https://vocabulary-book-xxxx.onrender.com，**把这个网址发给别人就能用**。
+#
+# 为什么需要它：GitHub Pages 只能托管静态文件，跑不了 Node —— 查词要代理模型请求（Key 不能放前端）、
+# 账号和云同步要存数据，所以后端必须落在能跑 Node 的地方。Render 免费档够个人用，注意两点：
+#   · 免费实例 15 分钟没请求会休眠，下次打开要等 30~60 秒冷启动（不是坏了）；
+#   · 磁盘是临时的，重新部署会清空 —— 所以持久数据必须放 Upstash，见下面的 UPSTASH_*。
 services:
   - type: web
     name: vocabulary-book
     runtime: node
     plan: free
+    region: singapore          # 国内访问比默认的 oregon 快不少
     # --include=dev：vite 属于构建期依赖（devDependencies），
-    # 而 Render 默认会注入 NODE_ENV=production，显式声明可避免装依赖时跳过 devDependencies。
+    # 而 Render 默认注入 NODE_ENV=production，显式声明可避免装依赖时跳过 devDependencies。
     buildCommand: npm install --include=dev && npm run build
     startCommand: node server/index.mjs
     healthCheckPath: /api/health
     envVars:
-      # 不要在此固定 PORT：Render 会自动注入 PORT，代码端用 process.env.PORT（缺省 8787）
+      # 不要在这里固定 PORT：Render 会自动注入 PORT，代码端读 process.env.PORT（缺省 8790）
       - key: AI_BASE_URL
         sync: false
       - key: AI_MODEL
         value: deepseek-chat
       - key: AI_API_KEY
         sync: false
-      # 安全相关（可选，留空即用默认值；详见 .env.example 说明）：
-      #   ALLOW_SERVER_KEY=0    强制访客自带 Key，不允许匿名借用服务端 Key（公共站点建议）
-      #   ALLOW_ORIGIN=...      跨域白名单，默认不允许任何跨域来源
-      #   RATE_LIMIT_PER_MIN=30 每个来源 IP 每分钟可提交的模型任务数
-      - key: ALLOW_SERVER_KEY
+
+      # ---- 词典核对（客观事实来自词典，讲解来自 AI，冲突时以词典为准）----
+      - key: DICT_PROVIDER
+        value: youdao-web          # 免费网页接口；换成 youdao-open 走官方（需下面两个 key）
+      - key: YOUDAO_APP_KEY
         sync: false
+      - key: YOUDAO_APP_SECRET
+        sync: false
+
+      # ---- 安全（可选，留空即用默认值；详见 .env.example）----
+      #   ALLOW_SERVER_KEY=0     强制访客自带 Key，别让人白嫖你的额度（**公网强烈建议**）
+      #   ALLOW_ORIGIN=...       跨域白名单；前端放 GitHub Pages 时必须填，否则请求全被浏览器拦掉
+      #   RATE_LIMIT_PER_MIN=30  每个来源 IP 每分钟可提交的模型任务数
+      - key: ALLOW_SERVER_KEY
+        value: "0"
       - key: ALLOW_ORIGIN
         sync: false
-      # 云同步（多设备同步）用的持久存储：不配的话同步数据写在容器临时磁盘上，重新部署会丢。
-      # 申请：https://console.upstash.com → Create Database → 复制 REST URL / REST Token
+      - key: RATE_LIMIT_PER_MIN
+        value: "30"
+
+      # ---- 多设备同步 + 账号的持久存储（强烈建议）----
+      # 不配：数据写在容器临时磁盘上，重新部署就没；账号功能会自动关闭（宁可不提供也不骗用户）。
+      # 申请：https://console.upstash.com → Create Database → 复制 REST URL / REST Token（有免费额度）
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+
+      # ---- 找回密码的邮件（可选，不配只有「忘记密码」不可用）----
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
         sync: false

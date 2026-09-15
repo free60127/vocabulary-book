@@ -1,0 +1,88 @@
+# 只部署**静态前端**到 GitHub Pages。
+#
+# ⚠️ 先说清楚 GitHub Pages 能做什么、不能做什么：
+#   ✅ 能：把 dist/ 这套静态文件挂到一个公网网址上，别人能打开页面。
+#   ❌ 不能：跑 Node。所以**后端不在这里** —— 查词要代理模型请求（Key 不能放前端）、
+#            账号与云同步要存数据，这些都得另外找个能跑 Node 的地方（Render 免费档可以）。
+#   换句话说：GitHub Pages 是"前端托管"，不是"整套部署"。只要后端，看仓库根的 render.yaml。
+#
+# 前端一旦搬到 GitHub Pages，就和后端**不同源**了，两件事必须同时成立，缺一个就是白屏/查不出词：
+#   1) 构建时注入 VITE_API_BASE（本工作流负责，值取仓库变量 VITE_API_BASE）
+#   2) 后端允许这个来源跨域：在 Render 的环境变量里设
+#        ALLOW_ORIGIN=https://<用户名>.github.io
+#      少了第 2 步，浏览器会在预检阶段直接拦掉所有请求 —— 页面看着正常，实际什么都查不出来。
+name: 部署前端到 GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'vite.config.js'
+      - 'package.json'
+      - '.github/workflows/deploy-pages.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 部署前必须先过测试：测试写了却不在关键路径上，等于没有
+      - name: 静态检查
+        run: npm run lint
+
+      - name: 测试
+        run: npm test
+
+      - name: 解析后端地址与站点前缀
+        id: cfg
+        run: |
+          API="${{ vars.VITE_API_BASE }}"
+          if [ -z "$API" ]; then API="https://vocabulary-book.onrender.com"; fi
+          echo "api=$API" >> "$GITHUB_OUTPUT"
+          # 项目站点挂在 /<仓库名>/ 子路径下，资源必须带这个前缀，否则 /assets/*.js 全 404
+          echo "base=/${{ github.event.repository.name }}/" >> "$GITHUB_OUTPUT"
+
+      - name: 构建（注入后端地址与站点前缀）
+        env:
+          VITE_API_BASE: ${{ steps.cfg.outputs.api }}
+          VITE_BASE: ${{ steps.cfg.outputs.base }}
+        run: npm run build
+
+      - name: 关掉 Jekyll（否则 _ 开头的文件不会被发布）
+        run: touch dist/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

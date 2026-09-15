@@ -211,6 +211,13 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
 .link { color: var(--brand); text-decoration: none; }
 
 @media screen and (max-width: 900px) {
+  /* iOS「添加到主屏」后是全屏运行：配合 index.html 的 black-translucent，
+     网页从 y=0 开始渲染，顶部内容会被半透明状态栏压住（iPhone 实测状态栏高 47~59px）。
+     viewport-fit=cover 让页面铺满整屏，再用 safe-area 把内容让回来；
+     非刘海设备 env() 取值 0，原有的 8px/16px 内边距不受影响。 */
+  .sidebar { padding-top: calc(16px + env(safe-area-inset-top, 0px)); }
+  .topbar { padding-top: calc(8px + env(safe-area-inset-top, 0px)); }
+  .sidebar-close { top: calc(10px + env(safe-area-inset-top, 0px)); }
   .sidebar { position: fixed; top: 0; left: 0; bottom: 0; z-index: 40; margin-left: 0; box-shadow: 0 0 30px rgba(0, 0, 0, .3); }
   .sidebar.collapsed { display: none; }
   .sidebar-close { display: inline-flex; position: absolute; top: 10px; right: 10px; z-index: 41; }
@@ -945,3 +952,25 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
 /* ---------- 备份弹窗 ---------- */
 .backup-modal { width: 520px; }
 .sync-block { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+
+/* ---------- 词典核对 ----------
+   AI 讲解里最容易被怀疑的是"客观事实"那几项（音标、词性、哪个考试常考）。
+   所以核对结论做成一条**贴在标题下方的状态条**：绿边=一致，黄边=有出入。
+   颜色只用于"是否需要你看一眼"，不用来装饰。 */
+.dict-badge { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 8px 0 2px;
+  padding: 6px 10px; border-radius: 8px; font-size: 12.5px; color: var(--teal);
+  background: #f2faf8; border: 1px solid #cfe9e3; }
+.dict-badge.warn { color: #8a5a00; background: #fffaf0; border-color: #f0dcb4; }
+.dict-badge svg { flex: none; }
+
+/* 词典原文：刻意保持"表格 + 原样文字"，和 AI 加工过的正文区分开 */
+.dict-section { border-top: 1px dashed var(--line); padding-top: 16px; }
+.dict-facts { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.dict-facts > div { display: flex; gap: 10px; align-items: baseline; }
+.dict-facts dt { flex: none; width: 46px; font-size: 12px; font-weight: 600; color: var(--muted); text-align: right; }
+.dict-facts dd { margin: 0; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  .dict-facts > div { flex-direction: column; gap: 2px; }
+  .dict-facts dt { width: auto; text-align: left; }
+}

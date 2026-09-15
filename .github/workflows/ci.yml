@@ -1,0 +1,42 @@
+# 每次 push / PR 都跑测试。
+#
+# 为什么要单独一个 workflow：部署工作流只在**前端文件**变化时触发，
+# 改 server/ 的提交根本不经过它 —— 也就是说改后端可以完全绕过测试。
+#
+# 注意：真实浏览器 e2e（tools/e2e-vocab.mjs）需要 Playwright，CI 里不装（省时间），
+# 所以那条链路只在本地跑（npm run test:e2e）；纯 node 的回归都在下面几步。
+name: CI（测试）
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 静态检查放在测试前面：ESLint 的 no-undef / jsx-no-undef 能抓住「漏了 import」
+      # 这类只在浏览器里才炸的白屏问题，no-use-before-define 再抓一层 TDZ 前向引用。
+      - name: 静态检查（未定义 / 未使用 / TDZ）
+        run: npm run lint
+
+      - name: 测试（形状清洗 / 词典核对 / 僵尸任务 / 复习排期 / 单词本合并 / 筛选排序 / 凭证扫描 + 组件）
+        run: npm test
+
+      - name: 构建（构建失败同样不该放过）
+        run: npm run build

@@ -18,7 +18,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as dnsLookup } from 'node:dns';
 
 import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
-import { sanitizeEntry, sanitizeQuiz } from './resultShape.mjs';
+import { sanitizeEntry, sanitizeQuiz, attachDict } from './resultShape.mjs';
+import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
 import { createAccounts } from './accounts.mjs';
@@ -166,6 +167,9 @@ const posInt = (raw, fallback) => {
   return Number.isFinite(n) && n >= 0 && String(raw ?? '').trim() !== '' ? Math.floor(n) : fallback;
 };
 const RATE_BUCKET_MAX = Math.max(1, posInt(process.env.RATE_BUCKET_MAX, 20000));
+
+/* 词典事实层：配了就用（有官方 key 优先官方），显式 off 就纯 AI。见 server/dict.mjs 顶部说明。 */
+const DICT_PROVIDER = resolveProvider(process.env);
 
 function sweepRateBuckets(now) {
   for (const [k, v] of rateBuckets) if (now > v.resetAt) rateBuckets.delete(k);
@@ -345,16 +349,43 @@ async function callLLM({ baseUrl, model, apiKey, system, user, maxTokens }) {
 }
 
 /* ---------- 查词任务（本产品的核心） ---------- */
+/**
+ * 把词典事实并进 AI 词条，并在**客观事实上以词典为准**。
+ *
+ * 只动两处，其余讲解内容保持模型输出：
+ *  · 音标：模型给的和词典里任何一个读音都对不上（或压根没给）→ 直接换成词典的。
+ *    这是最值得自动纠正的一项：object 这种"名词/动词重音不同"的词，模型错得很有代表性。
+ *  · 词性：模型漏掉的词性只**记下来**（不擅自往 meanings 里塞），卡片上提示用户"词典还标了 v."，
+ *    因为凭空补一条释义比不补更糟。
+ */
+function applyDict(entry, dictResult) {
+  if (!entry || !dictResult || !dictResult.ok) return entry;
+  const facts = dictResult.facts;
+  const conflicts = dictConflicts(entry, facts);
+  const corrected = { ...entry };
+  const dictPhone = facts.perPosPhonetics?.length
+    ? [...new Set(facts.perPosPhonetics.map((x) => x.phone))].join('; ')
+    : (facts.phonetics?.uk || facts.phonetics?.us || '');
+  if (dictPhone && (conflicts.phonetics.length || !entry.phonetic)) {
+    corrected.phonetic = dictPhone;
+    if (conflicts.phonetics.length) corrected.phoneticFixed = true;
+  }
+  return attachDict(corrected, facts, conflicts);
+}
+
 async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
   job.status = 'running';
   job.updatedAt = Date.now();
   saveJob(job);
+  // 先取词典事实：它是**客观事实的来源**（音标/词性/考试大纲标注），
+  // 也是这次讲解"接地"的依据。取不到就静默降级为纯 AI —— 词典是加分项，不该拖垮查词。
+  const dictResult = await lookupDict(term, { provider: DICT_PROVIDER, env: process.env });
   const raw = await callLLM({
     baseUrl, model, apiKey,
     system: LOOKUP_SYSTEM_PROMPT,
-    user: buildLookupMessage({ term, kindHint, level, context }),
+    user: buildLookupMessage({ term, kindHint, level, context, facts: dictResult.ok ? dictResult.facts : null }),
     maxTokens: 8000,
   });
   const parsed = parseJsonLoose(raw);
@@ -368,7 +399,7 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
     createdAt: Date.now(),
   });
   if (!entry) throw new Error('模型返回的词条不完整（缺少释义），请重试');
-  job.data = { entry };
+  job.data = { entry: applyDict(entry, dictResult) };
   job.status = 'done';
   job.updatedAt = Date.now();
   saveJob(job);
@@ -562,7 +593,22 @@ const server = http.createServer(async (req, res) => {
         rateLimit: { perMin: RATE_MAX, trustProxyHops: TRUST_PROXY_HOPS, trustCfIp: TRUST_CF_IP, buckets: rateBuckets.size, bucketMax: RATE_BUCKET_MAX },
         concurrency: { maxInflight: MAX_INFLIGHT_JOBS, maxQueued: MAX_QUEUED_JOBS },
         mail: { configured: Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) },
+        dict: { provider: DICT_PROVIDER, ...dictStats() },
       });
+    }
+
+    /* ---------- 词典核对（单独可查：排查"讲解对不对"时不用整条重跑） ---------- */
+    if (p === '/api/dict') {
+      const word = normalizeWord(url.searchParams.get('word') || '');
+      if (!word) return json(res, 400, { error: '缺少 word 参数' });
+      if (DICT_PROVIDER === 'off') {
+        return json(res, 200, { ok: true, enabled: false, reason: '词典核对未启用（DICT_PROVIDER=off）' });
+      }
+      if (rateLimited(req)) return json(res, 429, { error: '请求过于频繁，请稍后再试' });
+      const r = await lookupDict(word, { provider: DICT_PROVIDER, env: process.env });
+      return json(res, 200, r.ok
+        ? { ok: true, enabled: true, provider: DICT_PROVIDER, facts: r.facts }
+        : { ok: true, enabled: true, provider: DICT_PROVIDER, found: false, reason: r.reason });
     }
 
     /* ---------- 音标兜底 ---------- */
@@ -732,4 +778,7 @@ server.listen(PORT, () => {
   console.log('限流: ' + RATE_MAX + ' 次/分钟 · 可信代理 ' + TRUST_PROXY_HOPS + ' 跳'
     + (TRUST_CF_IP ? ' · 信任 CF-Connecting-IP' : ''));
   console.log('并发闸门: 同时 ' + MAX_INFLIGHT_JOBS + ' 个任务 · 排队上限 ' + MAX_QUEUED_JOBS);
+  console.log('词典核对: ' + (DICT_PROVIDER === 'off'
+    ? '未启用（DICT_PROVIDER=off，讲解完全由模型生成）'
+    : DICT_PROVIDER + (DICT_PROVIDER === 'youdao-web' ? '（免费网页接口，非官方，可能失效）' : '（官方开放平台）')));
 });

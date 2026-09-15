@@ -1,25 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="回译本">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="单词本">
   <!--
     图标源文件（矢量，唯一的真相）。
     改图标只改这里，然后跑 node tools/make-icons.mjs 重新生成全部尺寸。
 
-    设计说明：
-    · 主体是「回」—— 它本身就是嵌套方框，视觉上就是"往复 / 循环"，和"回译"天然契合；
-      而且**单个汉字在 16px 下比两个汉字清晰得多**，这是 favicon 的硬约束。
-    · 全部用路径/图形绘制，**不依赖任何字体** —— 用字体渲染汉字的话，
-      iOS / Android / Windows 会各自显示不同字形，那不是一个稳定的品牌标识。
-    · 笔画刻意加粗、内孔留够（约 94px，缩到 16px 仍有 ~2.9px），保证标签栏里不糊成一团。
-    · 配色只有两个：深蓝底 + 白字。装饰在 16px 下都会消失，不如不画。
+    设计说明（都是实测出来的取舍，不是审美偏好）：
+    · 主体是一个**几何构造的字母 A**：词汇/语言的通用符号，且**单个字母在 16px 下
+      比汉字或图形组合清晰得多** —— 这是 favicon 的硬约束。姊妹项目回译本用的是「回」
+      （嵌套方框），单词本必须一眼能区分开，所以这里换了完全不同的母题。
+    · A 用**路径**画，不依赖任何字体：用字体渲染的话 iOS / Android / Windows
+      会各自给出不同字形，那不是一个稳定的品牌标识。
+      笔画 60 / 横杠 54、顶点 miter 尖角 —— 缩到 16px 时笔画仍有约 1.9px，
+      A 的三角内孔留得够大，不会糊成一团。
+    · 底色用**品牌蓝渐变**而不是侧边栏那种深蓝：深色版和蓝色版都渲染出来放进真实
+      深色标签栏对比过 —— 深色底会和深色标签栏背景融在一起（只剩一个飘着的白 A），
+      蓝色版在任何主题的标签栏里都立得住。
+    · 金色下划线是唯一装饰：对应应用里的金色强调色（复习 / 到期 / 星标），
+      意为"已经标注过的词"。16px 下它会细到看不见 —— 这是**故意的**：
+      装饰在 16px 必然消失，那就让它消失得干净，而不是糊成一块脏点。
   -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#17323f"/>
-      <stop offset="1" stop-color="#0a1720"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#1f6feb"/>
+      <stop offset="1" stop-color="#123c86"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="115" fill="url(#bg)"/>
-  <g fill="none" stroke="#ffffff" stroke-width="46" stroke-linejoin="round">
-    <rect x="100" y="100" width="312" height="312" rx="26"/>
-    <rect x="186" y="186" width="140" height="140" rx="14"/>
+  <g fill="none" stroke="#ffffff" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M150 400 L256 112 L362 400" stroke-width="60"/>
+    <path d="M186 296 L326 296" stroke-width="54"/>
   </g>
+  <path d="M152 446 L360 446" fill="none" stroke="#f2cf92" stroke-width="28" stroke-linecap="round"/>
 </svg>

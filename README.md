@@ -23,6 +23,7 @@
 | 备份导出 / 导入 | ✅ 导出 JSON、导入合并（带墓碑，不会把删掉的词带回来） |
 | 朗读发音（词头 / 例句 / 复习卡片） | ✅ 浏览器语音合成，无网也能用 |
 | 标签筛选（按类型 / 到期 / 新词）与排序（到期 / 新词 / 掌握度 / 字母） | ✅ |
+| **词典核对**（音标/词性/大纲标注以有道词典为准，冲突显式标出） | ✅ 见下 |
 
 ## 跑起来
 
@@ -36,7 +37,8 @@
 
 ## 测试
 
-    npm test          # 形状清洗 19 + 僵尸阈值 7 + 复习排期 35 + 单词本合并 31 + 筛选排序 25 + 凭证扫描 3
+    npm test          # 形状清洗 19 + 词典核对 45 + 僵尸阈值 7 + 复习排期 35 + 单词本合并 37
+                      # + 筛选排序 25 + 凭证扫描 3
                       # 外加 vitest 组件测试 14 项（jsdom）
     npm run lint      # ESLint（hooks 依赖、未定义标识符、TDZ 前向引用）
     npm run test:ui   # 只跑组件层
@@ -51,6 +53,7 @@ e2e 自带 mock 模型与本地后端，不消耗真实 API 额度。
     server/            零依赖 Node 后端
       index.mjs        路由、任务生命周期、限流、并发闸门、静态托管
       prompt.mjs       ★ 查词与出题的提示词（这个产品的核心，改体验先改这里）
+      dict.mjs         ★ 词典事实层（有道；客观事实以它为准，查不到就静默降级）
       resultShape.mjs  ★ 模型返回值的形状清洗（单一事实源，同步层也用它）
       job-stale.mjs    僵尸任务阈值（必须小于前端超时，有测试守着）
       sync.mjs         云同步的 CAS 存储 + 快照形状校验
@@ -66,11 +69,19 @@ e2e 自带 mock 模型与本地后端，不消耗真实 API 额度。
       api.js / apiBase.js
       hooks/pollJob.js 统一的异步任务轮询（提交 → 轮询 → 结果）
     components/
-      EntryCard.jsx    词条讲解卡片
+      EntryCard.jsx    词条讲解卡片（含「词典核对」区块）
       QuizPane.jsx     自测试卷
       modals/          AI 设置 / 备份同步 / 账号
+    public/
+      icon.svg         图标**源文件**（矢量，唯一真相）
+    tools/
+      make-icons.mjs   由 icon.svg 生成全部尺寸（16/32/48/180/192/512 + maskable + .ico）
+      e2e-vocab.mjs    真实浏览器全链路（自带 mock 模型与 mock 词典，不碰外网）
 
 ★ = 这个项目自己长出来的部分；其余是把回译本里验证过的实现搬过来。
+
+图标改了 `public/icon.svg` 之后要跑 `node tools/make-icons.mjs` 重新生成全部尺寸
+（依赖 Playwright 栅格化；没有它会明确报错，不会悄悄产出一堆空文件）。
 
 ## 几个关键设计（都是踩过的坑）
 
@@ -87,11 +98,54 @@ e2e 自带 mock 模型与本地后端，不消耗真实 API 额度。
 - **静态托管的目录越界判断必须放行 `dist` 本身**：`path.relative(DIST, DIST)` 返回的是**空串**，
   第一版把空串当成"越界"，于是请求 `/` 直接 403 —— 用户看到的现象就是"index.html 打不开"。
   越界只可能是 `..` 开头或绝对路径。
+- **客观事实与讲解分开来源**：音标、词性、大纲标注这些**可判定**的东西来自词典，讲解来自模型。
+  两者冲突时以词典为准，并把冲突显式写在卡片上（"音标已按词典校正""词典还标了 v."）——
+  用户真正怕的不是 AI 讲得不深，是它一本正经地把 /əbˈdʒekt/ 标成名词读音。
+- **词典是加分项，不是依赖**：查不到 / 超时 / 连续失败熔断，一律静默降级为纯 AI。
+  外部接口挂了不该让"查词"这件事本身失败。
+- **`l.i` 有时是字符串、有时是数组**：词典接口的释义字段两种形态都出现过，
+  早期版本只用 `String()` 取，数组一律变空串 —— 音标搭配都正常、**释义全是空的**，
+  卡片看着没毛病，实际一个字都没核对。测试里专门有一条钉这个。
 - **`saveToBook` 必须能显式传"基础列表"**：`books` 是本次渲染的闭包快照，而"新建单词本并加入"
   是在同一个事件里先 `createBook` 再存词条 —— 沿用闭包会让 `upsertEntry([], id, entry)` 返回空数组，
   紧接着把**刚建好的本子抹掉**。表现就是"按钮点了没反应"，e2e 抓到的就是这个。
 - **侧边栏的本子项"打开/收起"要连 `view` 一起判**：只看 `activeBookId` 时，
   刚存完词（本子已是 active）再从搜索页点它会被 toggle 成空，页面原地不动 —— 又是"点了没反应"。
+
+## 部署：让别人也能用网址打开
+
+先说结论，因为这里最容易走错：
+
+| 方案 | 能跑后端吗 | 适合 | 坑 |
+| --- | --- | --- | --- |
+| **GitHub Pages** | ❌ 只能放静态前端 | 想把前端挂个公网地址 | 后端必须另找地方，否则查词/账号/同步全没有 |
+| **Render 免费档** | ✅ | 个人自用、发给朋友 | 15 分钟无请求会休眠（下次打开等 30~60 秒）；磁盘临时，**必须配 Upstash** |
+| 自己的 VPS / 家里电脑 + Cloudflare Tunnel | ✅ | 想完全自己掌控 | 要自己管进程、证书、备份 |
+
+**为什么 GitHub Pages 一个人扛不下来**：查词要拿服务端的 Key 去调模型（Key 放前端等于公开），
+账号与云同步要持久化数据 —— 这两件事都要求一个能跑 Node 的后端。GitHub Pages 只发静态文件。
+
+### 只部署后端（推荐，一步到位）
+
+1. https://dashboard.render.com → New → **Blueprint** → 选本仓库（它会读根目录的 `render.yaml`）
+2. 填环境变量：`AI_API_KEY` 必填；`UPSTASH_REDIS_REST_URL/TOKEN` 强烈建议
+   （不填的话账号功能会自动关闭、同步数据重新部署就没）
+3. 部署完拿到 `https://vocabulary-book-xxxx.onrender.com` —— **这个网址发给别人就能用**，
+   前端由后端一起托管，不需要第二处部署
+
+### 后端 + 前端分开（想要 GitHub Pages 的网址时）
+
+1. 先按上面部署后端，在 Render 里设 `ALLOW_ORIGIN=https://<你的用户名>.github.io`
+2. 仓库 Settings → Pages → Source 选 **GitHub Actions**
+3. 仓库 Settings → Variables → Actions 新建 `VITE_API_BASE` = 后端地址
+4. 推一次 `main` 即自动发布（`.github/workflows/deploy-pages.yml`）
+
+⚠️ 少了第 1 步的 `ALLOW_ORIGIN`，浏览器会在预检阶段拦掉所有请求 —— **页面看着正常，实际什么都查不出来**。
+
+### 公开之前请务必做的一件事
+
+在 Render 把 `ALLOW_SERVER_KEY` 设成 `0`（`render.yaml` 里已经默认设了）。
+不设的话，任何打开你网址的人都能用你的 Key 查词 —— 账单是你的。
 
 ## 环境变量
 
@@ -100,6 +154,9 @@ e2e 自带 mock 模型与本地后端，不消耗真实 API 额度。
 | 变量 | 说明 |
 | --- | --- |
 | `AI_BASE_URL` / `AI_MODEL` / `AI_API_KEY` | 任意 OpenAI 兼容接口 |
+| `DICT_PROVIDER` | 词典核对：`youdao-web`（默认，免费）/ `youdao-open`（官方付费）/ `off` |
+| `YOUDAO_APP_KEY` / `YOUDAO_APP_SECRET` | 走官方开放平台时的凭据 |
+| `DICT_BASE_URL` | 词典接口地址，默认 `https://dict.youdao.com`（可指向自建镜像） |
 | `PORT` | 后端端口（默认 8790） |
 | `ALLOW_SERVER_KEY` | 设 `0` 强制访客自带 Key（公网开放时建议设 0） |
 | `ALLOW_ORIGIN` | 前后端分开部署时的跨域白名单 |

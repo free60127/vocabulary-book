@@ -12,6 +12,8 @@
  *  · 例句要能体现差别：每条例句配一句「它在这里承担什么语境功能」。
  */
 
+import { buildFactsBlock } from './dict.mjs';
+
 export const LOOKUP_SYSTEM_PROMPT = `你是「单词本」的王牌英语词汇导师，专长是把一个单词、短语或句型讲到学习者**再也不会用错**：不仅能说清它是什么意思，更能说清它和近义词的差别、什么场合该用它、什么场合用它会别扭。
 
 你的输出必须严格是 JSON（不要 markdown 包装、不要代码块标记、不要额外说明）。结构如下：
@@ -127,11 +129,14 @@ export function normalizeLevel(level) {
 /* ---------- 自测题（从单词本出题） ---------- */
 /**
  * 查词的用户消息。
- * @param {{term:string, kindHint?:string, level?:string, context?:string}} o
+ * @param {{term:string, kindHint?:string, level?:string, context?:string, facts?:object}} o
  *   context = 可选：用户是在哪句话里遇到这个词的（有则按语境义讲解）
+ *   facts   = 可选：词典查到的客观事实（音标/词性/大纲标注/搭配…），用来给讲解"接地"，
+ *             见 server/dict.mjs 的 buildFactsBlock —— 事实以词典为准，模型只负责讲。
  */
-export function buildLookupMessage({ term, kindHint, level = '四六级', context }) {
+export function buildLookupMessage({ term, kindHint, level = '四六级', context, facts }) {
   const L = LEVEL_GUIDE[level] || LEVEL_GUIDE['四六级'];
+  const factsBlock = buildFactsBlock(facts);
   return '请讲解下面这个词条，按系统提示的 JSON 结构输出完整内容。\n\n'
     + '【查询内容】' + term + '\n'
     + (kindHint ? '【类型提示】用户认为是：' + kindHint + '\n' : '')
@@ -143,6 +148,7 @@ export function buildLookupMessage({ term, kindHint, level = '四六级', contex
     + '- 例句难度：' + L.exampleLevel + '\n'
     + '注意：讲解深度只影响**中文讲解的深浅程度与例句难度**，不影响词条本身的准确性；\n'
     + '不要把浅等级的词条强行讲成学术论文，也不要把高阶词讲得幼稚。\n'
+    + factsBlock
     + '\n请输出完整 JSON。';
 }
 

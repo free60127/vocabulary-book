@@ -1,7 +1,69 @@
 import React, { useState } from 'react';
-import { Check, Plus, Star, Volume2 } from 'lucide-react';
+import { Check, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { speak } from '../speak.js';
+
+/**
+ * 词典核对条：一行字说明"这条讲解有多少是查过词典的"。
+ *
+ * 为什么要摆在最上面而不是塞进末尾的小字里：用户查词最大的顾虑是"AI 会不会编"。
+ * 这个结论必须**第一眼看到**，否则他会一直怀疑音标和"四六级常考"这类话。
+ */
+function DictBadge({ dict, conflicts }) {
+  if (!dict) return null;
+  const fixed = conflicts?.phonetics?.length;
+  const missing = conflicts?.missingPos || [];
+  const parts = [];
+  if (fixed) parts.push('音标已按词典校正');
+  else if (dict.phonetics?.uk || dict.phonetics?.us) parts.push('音标一致');
+  if (missing.length) parts.push('词典还标了 ' + missing.join(' / '));
+  if (dict.examTypes?.length) parts.push('大纲：' + dict.examTypes.slice(0, 4).join('/'));
+  return (
+    <div className={'dict-badge' + (fixed || missing ? ' warn' : '')} role="note">
+      <ShieldCheck size={14} />
+      <span>已用有道词典核对</span>
+      {parts.length ? <span className="muted small">{parts.join(' · ')}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * 词典原文：把"权威事实"原文列出来，让用户能自己复核 AI 的讲解。
+ *
+ * 这里刻意**不重新排版成好听的样式** —— 它就是词典怎么说，一字不改。
+ * 卡片其余部分都是 AI 的加工，这一块是原始事实，两者的区别要看得出来。
+ */
+function DictSection({ dict }) {
+  if (!dict) return null;
+  const perPos = (dict.perPosPhonetics || []);
+  const uk = [...new Set(perPos.filter((x) => x.lang === 'uk').map((x) => `${x.phone}（${x.pos}.）`))];
+  const us = [...new Set(perPos.filter((x) => x.lang === 'us').map((x) => `${x.phone}（${x.pos}.）`))];
+  return (
+    <section className="sheet-section dict-section">
+      <div className="section-heading">
+        <span className="label-dot" />
+        <h2>词典核对</h2>
+        <span className="muted small">{dict.source === 'youdao' ? '有道词典' : dict.source}</span>
+      </div>
+      <dl className="dict-facts">
+        {uk.length || dict.phonetics?.uk ? (
+          <div><dt>英</dt><dd>{uk.length ? uk.join('，') : dict.phonetics.uk}</dd></div>
+        ) : null}
+        {us.length || dict.phonetics?.us ? (
+          <div><dt>美</dt><dd>{us.length ? us.join('，') : dict.phonetics.us}</dd></div>
+        ) : null}
+        {(dict.senses || []).map((s, i) => (
+          <div key={i}><dt>{s.pos || '—'}</dt><dd>{s.cn}</dd></div>
+        ))}
+        {dict.forms?.length ? <div><dt>词形</dt><dd>{dict.forms.join('、')}</dd></div> : null}
+        {dict.examTypes?.length ? <div><dt>大纲</dt><dd>{dict.examTypes.join('、')}</dd></div> : null}
+        {dict.phrases?.length ? (
+          <div><dt>搭配</dt><dd>{dict.phrases.slice(0, 8).map((p) => `${p.en}（${p.cn}）`).join('；')}</dd></div>
+        ) : null}
+      </dl>
+    </section>
+  );
+}
 
 /**
  * 词条卡片：把 AI 讲解按"能直接用"的顺序排出来。
@@ -13,6 +75,12 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
   const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
   const saved = Boolean(existing);
   const m = entry.mnemonic || {};
+  const dict = entry.dict || null;
+  const conflicts = entry.dictConflicts || null;
+  // AI 没给搭配时，用词典的兜底 —— 宁可少而准，也不要空着
+  const collocations = (entry.collocations || []).length
+    ? entry.collocations
+    : (dict?.phrases || []).map((p) => p.en);
 
   return (
     <article className="sheet entry-card">
@@ -23,6 +91,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
           {entry.phonetic ? <span className="phonetic">{entry.phonetic}</span> : null}
           <button className="icon-btn" title="朗读" aria-label="朗读" onClick={() => speak(entry.head)}><Volume2 size={16} /></button>
         </h1>
+        <DictBadge dict={dict} conflicts={conflicts} />
         <div className="chips chips-meta">
           {entry.pos ? <span className="chip">{entry.pos}</span> : null}
           {entry.register ? <span className="chip">{entry.register}</span> : null}
@@ -93,10 +162,14 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
         </section>
       ) : null}
 
-      {(entry.collocations || []).length ? (
+      {collocations.length ? (
         <section className="sheet-section">
-          <div className="section-heading"><span className="label-dot" /><h2>常用搭配</h2></div>
-          <div className="chips">{entry.collocations.map((c, i) => <span key={i} className="chip">{c}</span>)}</div>
+          <div className="section-heading">
+            <span className="label-dot" /><h2>常用搭配</h2>
+            {!(entry.collocations || []).length && dict?.phrases?.length
+              ? <span className="muted small">取自词典</span> : null}
+          </div>
+          <div className="chips">{collocations.map((c, i) => <span key={i} className="chip">{c}</span>)}</div>
         </section>
       ) : null}
 
@@ -134,6 +207,8 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
           <p>{entry.examTips}</p>
         </section>
       ) : null}
+
+      <DictSection dict={dict} />
 
       <div className="save-bar">
         {saved ? <span className="saved-flag"><Star size={14} fill="currentColor" />已在「{existing.name}」里</span> : null}

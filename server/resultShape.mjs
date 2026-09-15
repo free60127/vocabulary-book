@@ -57,6 +57,69 @@ function sanitizeSynonym(s) {
 const KINDS = ['word', 'phrase', 'pattern'];
 
 /**
+ * 清洗"词典核对"块。
+ *
+ * 这块是**外部数据**（有道词典的返回），和模型返回的一样不可信 ——
+ * 字段可能被对方改、可能夹 HTML、可能塞进超长字符串。所以照样逐字段重建 + 限长，
+ * 而不是整块 JSON.parse 进来就用。整块也参与 entryBytes 上限。
+ */
+export function sanitizeDict(raw) {
+  if (!isPlainObject(raw)) return null;
+  const head = boundedString(raw.head, ENTRY_LIMITS.headChars).trim();
+  const ph = isPlainObject(raw.phonetics) ? raw.phonetics : {};
+  const out = {
+    source: boundedString(raw.source, 40),
+    head,
+    phonetics: { uk: boundedString(ph.uk, 120), us: boundedString(ph.us, 120) },
+    perPosPhonetics: (Array.isArray(raw.perPosPhonetics) ? raw.perPosPhonetics : [])
+      .filter(isPlainObject).slice(0, 12)
+      .map((x) => ({ lang: x.lang === 'us' ? 'us' : 'uk', pos: boundedString(x.pos, 20), phone: boundedString(x.phone, 120) }))
+      .filter((x) => x.pos && x.phone),
+    senses: (Array.isArray(raw.senses) ? raw.senses : [])
+      .filter(isPlainObject).slice(0, 10)
+      .map((s) => ({ pos: boundedString(s.pos, 20), cn: boundedString(s.cn, 800) }))
+      .filter((s) => s.cn),
+    examTypes: stringList(raw.examTypes, 40, 10),
+    forms: stringList(raw.forms, 80, 8),
+    phrases: (Array.isArray(raw.phrases) ? raw.phrases : [])
+      .filter(isPlainObject).slice(0, 12)
+      .map((p) => ({ en: boundedString(p.en, 200), cn: boundedString(p.cn, 400) }))
+      .filter((p) => p.en && p.cn),
+    synonyms: (Array.isArray(raw.synonyms) ? raw.synonyms : [])
+      .filter(isPlainObject).slice(0, 4)
+      .map((s) => ({ pos: boundedString(s.pos, 20), cn: boundedString(s.cn, 400), words: stringList(s.words, 60, 10) }))
+      .filter((s) => s.words.length),
+    family: (Array.isArray(raw.family) ? raw.family : [])
+      .filter(isPlainObject).slice(0, 4)
+      .map((f) => ({
+        pos: boundedString(f.pos, 20),
+        words: (Array.isArray(f.words) ? f.words : []).filter(isPlainObject).slice(0, 8)
+          .map((w) => ({ w: boundedString(w.w, 60), cn: boundedString(w.cn, 200) })).filter((w) => w.w),
+      }))
+      .filter((f) => f.words.length),
+    sentences: (Array.isArray(raw.sentences) ? raw.sentences : [])
+      .filter(isPlainObject).slice(0, 5)
+      .map((s) => ({ en: boundedString(s.en, 400), cn: boundedString(s.cn, 400) }))
+      .filter((s) => s.en),
+  };
+  const useful = out.senses.length || out.phonetics.uk || out.phonetics.us || out.phrases.length || out.examTypes.length;
+  return useful ? out : null;
+}
+
+/** 把词典核对结果并回词条（只有真取到东西才挂上去，避免同步里多出一堆空壳） */
+export function attachDict(entry, dict, conflicts) {
+  if (!entry) return entry;
+  const clean = sanitizeDict(dict);
+  if (!clean) return entry;
+  const out = { ...entry, dict: clean };
+  const c = isPlainObject(conflicts) ? conflicts : {};
+  const phonetics = stringList(c.phonetics, 120, 3);
+  const missingPos = stringList(c.missingPos, 20, 6);
+  if (phonetics.length || missingPos.length) out.dictConflicts = { phonetics, missingPos };
+  return jsonBytes(out) > ENTRY_LIMITS.entryBytes ? entry : out;
+}
+
+/**
  * 把一个词条清洗成可落库的形状。缺 id 或 head 的返回 null（这种记录没有意义，
  * 而且没有稳定 id 就没法合并/删除）。id 由调用方补。
  */
