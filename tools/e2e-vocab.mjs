@@ -168,7 +168,8 @@ try {
     dn.rows.slice(0, 3).join(' | '));
 
   /* ---------- 加入单词本 ---------- */
-  await page.locator('.save-bar button').click();
+  // 用 .primary-btn 限定：保存栏里现在还多了「导出 PDF」，选择器太宽会撞上 Playwright 的严格模式
+  await page.locator('.save-bar .primary-btn').click();
   await page.waitForSelector('.saved-flag', { timeout: 10000 });
   const afterSave = await page.evaluate(() => ({
     flag: document.querySelector('.saved-flag')?.textContent.trim(),
