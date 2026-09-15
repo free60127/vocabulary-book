@@ -67,6 +67,17 @@ export default function App() {
    * 打印那一刻由 body.printing 把主界面藏起来（见 styles.css 的 @media print）。
    * 早先只有自测题能导出，而且各写各的 window.print() —— 加一个"导出这个/整本"就必然漏样式。 */
   const [printJob, setPrintJob] = useState(null)
+  /* 手机端多一步说明：Android/iOS 的 window.print() 直接弹系统打印界面，
+     而"存成文件"藏在右上角的菜单里（⋮ → 保存为 PDF / 存储为 PDF）。
+     不先说清楚，用户只会看到一个"未选择打印机"的界面，以为功能坏了。 */
+  const [printHint, setPrintHint] = useState(null)
+  const startPrint = (job) => {
+    const coarse = typeof window !== 'undefined'
+      && ((window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || window.innerWidth <= 900)
+    if (coarse) setPrintHint(job)
+    else setPrintJob(job)
+  }
+
   useEffect(() => {
     if (!printJob) return undefined
     document.body.classList.add('printing')
@@ -880,7 +891,7 @@ export default function App() {
         ) : view === 'quiz' ? (
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
-            onExportPdf={() => setPrintJob({ kind: 'quiz', quiz })}
+            onExportPdf={() => startPrint({ kind: 'quiz', quiz })}
             onRegenerate={() => setQuizSetupOpen(true)} onExit={() => setView('search')} />
         ) : view === 'book' && activeBook ? (
           <section className="editor">
@@ -905,7 +916,7 @@ export default function App() {
                 </button>
                 {/* 整本导出：**不受上面的筛选/搜索影响**，永远是本子的全部词条 ——
                     "导出词汇本"就该是整本，导出到一半发现缺词才是坑 */}
-                <button className="ghost-btn sm" onClick={() => setPrintJob({ kind: 'book', book: activeBook })}
+                <button className="ghost-btn sm" onClick={() => startPrint({ kind: 'book', book: activeBook })}
                   disabled={!activeBook.entries.length} title="把本子里全部词条导出成 PDF（不受筛选影响）">
                   <FileDown size={14} />导出本子 PDF
                 </button>
@@ -967,7 +978,7 @@ export default function App() {
 
             {entry ? (
               <EntryCard entry={entry} books={books} existing={findEntryBook(books, entry.id)}
-                onExportPdf={(e) => setPrintJob({ kind: 'entry', entry: e })}
+                onExportPdf={(e) => startPrint({ kind: 'entry', entry: e })}
                 onToggleFavorite={toggleFavorite} isFavorite={isFavorite} onLookupWord={runLookup}
                 onSave={saveToBook} onCreateBook={createAndSave} />
             ) : null}
@@ -1024,6 +1035,24 @@ export default function App() {
         </div>
       ) : null}
     </div>
+
+      {printHint ? (
+        <div className="modal-mask" onClick={() => setPrintHint(null)}>
+          <div className="modal print-hint-modal" role="dialog" aria-modal="true" aria-label="导出 PDF" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head"><h2>导出 PDF</h2><button className="icon-btn" onClick={() => setPrintHint(null)} aria-label="关闭"><X size={16} /></button></div>
+            <p>接下来会打开系统的打印界面。<b>手机上系统默认没有打印机</b>，保存成文件的入口在右上角：</p>
+            <ol className="print-hint-steps">
+              <li>点右上角的 <b>⋮</b>（三个点）</li>
+              <li>选「<b>保存为 PDF</b>」或「<b>存储为 PDF</b>」</li>
+            </ol>
+            <p className="muted small">排版已经按 A4 纸设好，手机上预览时看着小是正常的（它会缩放到纸张宽度）。</p>
+            <div className="modal-actions">
+              <button className="ghost-btn" onClick={() => setPrintHint(null)}>取消</button>
+              <button className="primary-btn" onClick={() => { const j = printHint; setPrintHint(null); setPrintJob(j) }}>知道了，继续</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {favOpen ? (
         <FavoritesModal

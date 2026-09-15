@@ -456,6 +456,41 @@ try {
 
     const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     ok('手机端没有横向溢出', overflow <= 1, `溢出 ${overflow}px`);
+
+    /* 手机端导出 PDF：window.print() 直接弹系统打印界面，"存成文件"藏在右上角菜单里，
+       所以必须先给一句说明；否则用户看到"未选择打印机"会以为功能坏了。
+       顺带钉住 print 媒体下**不许有横向溢出** —— 手机打印预览按设备宽度排版，
+       内容比设备宽就会被整体缩放，表现为"排版怪异、字突然变小"（实测过一次 518/412）。 */
+    {
+      await mp.locator('.sidebar-close').tap().catch(() => {});
+      await mp.waitForTimeout(200);
+      const epub = await mp.evaluate(() => {
+        localStorage.setItem('vb-books', JSON.stringify([{ id: 'bk-m2', name: '导出测试本', note: '', createdAt: 1,
+          entries: [{ id: 'wb-m2', head: 'enshrine', brief: '奉为神圣', kind: 'word',
+            meanings: [{ pos: '动词', cn: '庄严载入' }],
+            examples: [{ en: 'The right is enshrined in the constitution and cannot be removed by a simple majority vote.', cn: '这项权利被庄严载入宪法。' }],
+            createdAt: 1 }] }]));
+        return true;
+      });
+      await mp.reload({ waitUntil: 'domcontentloaded' });
+      await mp.waitForSelector('.side-toggle', { timeout: 30000 });
+      await mp.locator('.side-toggle').tap();
+      await mp.waitForTimeout(300);
+      await mp.locator('.lesson-item').first().tap();
+      await mp.waitForSelector('.entry-row', { timeout: 10000 });
+      await mp.locator('button:has-text("导出本子 PDF")').tap();
+      await mp.waitForSelector('.print-hint-modal', { timeout: 8000 });
+      const hint = await mp.locator('.print-hint-modal').innerText();
+      ok('手机端导出前先说明"保存为 PDF 在系统菜单里"', /保存为 PDF|存储为 PDF/.test(hint) && /⋮|三个点/.test(hint), hint.replace(/\s+/g, ' ').slice(0, 70));
+      await mp.locator('.print-hint-modal button:has-text("知道了，继续")').tap();
+      await mp.waitForSelector('.print-sheet', { state: 'attached', timeout: 8000 });
+      await mp.emulateMedia({ media: 'print' });
+      await mp.waitForTimeout(300);
+      const pOverflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      ok('print 媒体下也没有横向溢出（否则系统会把整页缩小、排版变形）', pOverflow <= 1, `溢出 ${pOverflow}px`);
+      await mp.emulateMedia({ media: 'screen' });
+      ok('准备导出用的本子已就绪', epub);
+    }
     ok('手机端无 JS 报错', mErrors.length === 0, mErrors.slice(0, 2).join(' | '));
     await mctx.close();
   }

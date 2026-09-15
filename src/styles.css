@@ -178,8 +178,12 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
 .syn-meaning { margin-top: 2px; font-size: 12px; }
 .syn-usage { font-size: 12px; color: #3d4854; margin-top: 2px; }
 .syn-ex { font-size: 12px; color: #0d7a70; margin-top: 3px; font-style: italic; }
-.example-line { font-size: 12px; line-height: 1.6; display: flex; gap: 8px; align-items: baseline; }
-.example-line em { color: #0d7a70; flex-shrink: 0; font-style: italic; }
+/* 例句行：**必须允许换行**。原来是 `flex-shrink: 0` —— 英文例句一长，这一行就永远比容器宽，
+   把整页撑出横向溢出（实测手机 print 媒体下整页宽 518 / 视口 412）。
+   桌面端因为容器宽看不出来，手机打印预览会把整页缩放去适应，结果"排版很怪异"。
+   （原来只在 @media screen and (max-width:900px) 里补了 flex-shrink:1 —— 打印时那条不生效。） */
+.example-line { font-size: 12px; line-height: 1.6; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; row-gap: 2px; }
+.example-line em { color: #0d7a70; flex-shrink: 1; min-width: 0; font-style: italic; }
 .example-line span { color: var(--muted); }
 .vocab-card { border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: #fbfcfd; }
 .vocab-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
@@ -991,10 +995,20 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
 .print-cover p { margin: 0; font-size: 12.5px; }
 
 @media print {
+  /* 显式声明纸张：Android 默认纸张与桌面不同，不写死会导致两端版式差很远 */
+  @page { size: A4; margin: 12mm; }
   /* 打印时只留打印页 */
   body.printing .app { display: none !important; }
   body.printing .print-sheet { display: block !important; }
   .print-sheet { background: #fff; color: #1c2733; }
+  /* 让打印版式**与设备宽度无关**：手机上打印预览是按设备宽度排版再缩放到纸张的，
+     内容一旦比设备宽度还宽，整页会被缩小 —— 表现出来就是"排版怪异、字突然变小"。
+     所以这里把宽度、字号缩放、长词换行全部钉死。 */
+  html, body { width: auto !important; -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important; }
+  .print-sheet { width: 100% !important; max-width: 100% !important; overflow-wrap: anywhere; }
+  .print-sheet .entry-card, .print-sheet .summary-card, .print-sheet .sheet-section { max-width: 100% !important; }
+  .print-sheet .example-line { flex-wrap: wrap !important; }
+  .print-sheet .example-line em { flex-shrink: 1 !important; min-width: 0 !important; }
   .print-sheet .entry-card {
     border: none !important; box-shadow: none !important; border-radius: 0 !important;
     padding: 0 !important; max-width: none !important;
@@ -1037,3 +1051,8 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
   .fav-row { flex-direction: column; align-items: stretch; }
   .fav-row-acts { justify-content: flex-end; flex-wrap: wrap; }
 }
+
+/* 手机端导出 PDF 的说明弹窗（保存入口在系统打印界面的右上角菜单里） */
+.print-hint-modal { width: 460px; }
+.print-hint-steps { margin: 8px 0 10px; padding-left: 22px; line-height: 2; }
+.print-hint-steps b { background: #eef5ff; border-radius: 4px; padding: 0 5px; }
