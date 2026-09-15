@@ -28,6 +28,25 @@
         <p style="color: #5b6875">单词本是一个前端交互应用（查词讲解 + 间隔重复复习），请在浏览器设置里开启 JavaScript 后重新打开本页。</p>
       </div>
     </noscript>
+    <script>
+      (function () {
+        if (location.protocol !== 'file:') return;
+        document.getElementById('root').innerHTML =
+          '<div style="max-width:620px;margin:12vh auto;padding:0 22px;font-family:system-ui,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;line-height:1.9;color:#1c2733">'
+          + '<h1 style="font-size:22px;margin:0 0 6px">这个页面不能直接双击打开</h1>'
+          + '<p style="color:#5b6875;margin:0 0 18px">你打开的是 index.html 的源文件，而它需要由本地服务编译后再访问。</p>'
+          + '<p style="margin:0 0 8px"><b>正确用法（在项目目录里执行）：</b></p>'
+          + '<pre style="background:#10222e;color:#eaf3f8;padding:14px 16px;border-radius:10px;overflow:auto;font-size:13px;line-height:1.8">'
+          + 'cd /d "D:\\vocabulary book"\n'
+          + 'npm install        # 第一次需要，装依赖\n'
+          + 'npm run server     # 启动后端（同时托管前端）\n\n'
+          + '然后浏览器打开 http://localhost:8790\n\n'
+          + '开发模式（改代码即时刷新）：\n'
+          + 'npm run dev        # 再打开 http://localhost:5173</pre>'
+          + '<p style="color:#5b6875;font-size:13px;margin:16px 0 0">还没有 Node？到 nodejs.org 装 LTS 版本即可。</p>'
+          + '</div>';
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

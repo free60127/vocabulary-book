@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="回译本">
+  <!--
+    图标源文件（矢量，唯一的真相）。
+    改图标只改这里，然后跑 node tools/make-icons.mjs 重新生成全部尺寸。
+
+    设计说明：
+    · 主体是「回」—— 它本身就是嵌套方框，视觉上就是"往复 / 循环"，和"回译"天然契合；
+      而且**单个汉字在 16px 下比两个汉字清晰得多**，这是 favicon 的硬约束。
+    · 全部用路径/图形绘制，**不依赖任何字体** —— 用字体渲染汉字的话，
+      iOS / Android / Windows 会各自显示不同字形，那不是一个稳定的品牌标识。
+    · 笔画刻意加粗、内孔留够（约 94px，缩到 16px 仍有 ~2.9px），保证标签栏里不糊成一团。
+    · 配色只有两个：深蓝底 + 白字。装饰在 16px 下都会消失，不如不画。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#17323f"/>
+      <stop offset="1" stop-color="#0a1720"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="46" stroke-linejoin="round">
+    <rect x="100" y="100" width="312" height="312" rx="26"/>
+    <rect x="186" y="186" width="140" height="140" rx="14"/>
+  </g>
+</svg>

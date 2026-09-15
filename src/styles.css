@@ -881,3 +881,67 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
   .dir-modal { width: calc(100vw - 24px); }
   .dir-tabs { margin-left: 0; }
 }
+
+/* ==========================================================================
+   单词本特有的界面（风格沿用上面那套变量：--line / --brand / --muted / --panel）
+   ========================================================================== */
+
+/* ---------- 搜索栏 ---------- */
+.search-bar { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin-bottom: 14px; color: var(--muted); }
+.search-input { flex: 1; min-width: 0; border: none; outline: none; font: inherit; font-size: 15px; color: var(--text); background: transparent; }
+.search-input::placeholder { color: #98a4b0; }
+@media screen and (max-width: 900px) {
+  .search-bar { flex-wrap: wrap; }
+  .search-input { flex-basis: 100%; order: -1; }
+}
+
+/* ---------- 词条卡片 ---------- */
+.entry-card { margin-top: 4px; }
+.entry-card .sheet-title h1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.phonetic { font-size: 15px; color: var(--muted); font-weight: 400; }
+.entry-brief { margin: 8px 0 0; font-size: 15px; color: #3d4854; line-height: 1.8; }
+.meaning-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.meaning-row:last-child { border-bottom: none; }
+.meaning-row > div { flex: 1; min-width: 0; line-height: 1.75; }
+.scene-line { display: flex; align-items: flex-start; gap: 7px; font-size: 14px; line-height: 1.85; color: #33404d; }
+.scene-line svg { margin-top: 5px; color: var(--green); flex: none; }
+.scene-line.warn { color: var(--red); }
+
+/* 底部「加入单词本」操作条：跟着卡片走，不悬浮（手机上悬浮条会挡内容） */
+.save-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.saved-flag { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--gold); }
+
+/* ---------- 单词本列表 ---------- */
+.book-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.book-toolbar .fav-search { flex: 1; min-width: 180px; }
+.entry-list { display: flex; flex-direction: column; gap: 4px; }
+.entry-row { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); }
+.entry-row:last-child { border-bottom: none; }
+.entry-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 10px 4px; text-align: left; border-radius: 8px; }
+.entry-open:hover { background: #f6f9fc; }
+.entry-open strong { font-size: 15px; flex: none; }
+.entry-open .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.due-tag { margin-left: auto; flex: none; font-size: 11.5px; color: var(--muted); background: #f2f5f8; border-radius: 999px; padding: 2px 9px; }
+
+/* ---------- 复习 ---------- */
+.review-pane { max-width: 720px; margin: 0 auto; }
+.review-word { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+.review-word strong { font-size: 30px; letter-spacing: .01em; }
+.review-answer { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.review-answer p { margin: 6px 0; line-height: 1.85; }
+.grade-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.grade-bar .ghost-btn { flex: 1; min-width: 120px; flex-direction: column; gap: 2px; padding: 10px 12px; }
+.grade-bar .grade-err { border-color: #f3c2c2; color: var(--red); }
+.grade-bar .grade-ok { border-color: #b9e1d8; color: var(--teal); }
+
+/* ---------- 自测题 ---------- */
+.quiz-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.quiz-no { width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; display: grid; place-items: center; flex: none; }
+.quiz-options { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.quiz-option { display: flex; align-items: baseline; gap: 8px; font-size: 14px; line-height: 1.75; }
+.quiz-opt-key { flex: none; width: 18px; color: var(--muted); font-weight: 700; font-size: 12.5px; }
+.quiz-answers { margin-top: 26px; }
+
+/* ---------- 备份弹窗 ---------- */
+.backup-modal { width: 520px; }
+.sync-block { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }

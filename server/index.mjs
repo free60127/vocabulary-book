@@ -444,10 +444,18 @@ function applyCors(req, res) {
 /** 静态文件：先找真实文件，找不到就回 index.html（SPA） */
 function insideDist(file) {
   const rel = path.relative(DIST, file);
-  return rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  // ⚠️ rel === '' 表示"就是 dist 目录本身"（请求 `/` 时）—— 那是合法的，必须放行。
+  // 第一版把它当成越界，结果**首页直接 403**（浏览器只看到一句 JSON 错误），
+  // 用户看到的就是"index.html 打不开"。越界只可能是 `..` 开头或绝对路径。
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 function serveStatic(res, pathname) {
-  let file = path.normalize(path.join(DIST, decodeURIComponent(pathname)));
+  // 畸形转义（`/a%zz`、裸 `%`）会让 decodeURIComponent 抛 URIError —— 那是客户端写错了 URL，
+  // 不该记成服务器 500（会把日志刷满并掩盖真实故障）。
+  let decoded;
+  try { decoded = decodeURIComponent(pathname); }
+  catch { return json(res, 400, { error: 'bad request path' }); }
+  let file = path.normalize(path.join(DIST, decoded));
   if (!insideDist(file)) return json(res, 403, { error: 'forbidden' });
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     file = path.join(DIST, 'index.html');

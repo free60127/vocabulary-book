@@ -1,0 +1,31 @@
+{
+  "name": "单词本 · 查词 · 复习 · 自测",
+  "short_name": "单词本",
+  "description": "查一个词就得到完整讲解：词性、褒贬、情感强度、词根词缀、使用场景、助记、近义词对比与例句；存进单词本，按间隔重复安排每日复习。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#10222e",
+  "theme_color": "#10222e",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
