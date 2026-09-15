@@ -12,6 +12,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import QuizPane from '../../src/components/QuizPane.jsx';
 import EntryCard from '../../src/components/EntryCard.jsx';
+import PrintSheet from '../../src/components/PrintSheet.jsx';
 
 const QUIZ = {
   title: '单词本自测 · 2 题',
@@ -136,5 +137,65 @@ describe('EntryCard 词条卡片', () => {
     render(<EntryCard entry={ENTRY} books={[]} existing={null} onSave={noop} onCreateBook={onCreateBook} />);
     fireEvent.click(screen.getByText('新建单词本并加入'));
     expect(onCreateBook).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ---------- 导出 PDF 的打印页 ----------
+   两个容易漏的点：打印变体里不该有交互件（纸上用不到，还会占地方），
+   整本导出必须把**全部**词条都放进去（不受筛选影响）。 */
+describe('EntryCard 打印变体', () => {
+  it('打印变体没有任何按钮（朗读/保存/导出都不该印在纸上）', () => {
+    render(<EntryCard entry={ENTRY} variant="print" />);
+    expect(document.querySelectorAll('.entry-card button').length).toBe(0);
+    expect(document.querySelector('.save-bar')).toBeNull();
+  });
+
+  it('打印变体保留全部讲解板块与词典核对', () => {
+    const withDict = { ...ENTRY, dict: { source: 'youdao', phonetics: { uk: '', us: '' }, perPosPhonetics: [], senses: [{ pos: 'n.', cn: '物体' }], examTypes: ['CET4'], forms: [], phrases: [] } };
+    render(<EntryCard entry={withDict} variant="print" />);
+    const headings = [...document.querySelectorAll('.section-heading h2')].map((h) => h.textContent);
+    expect(headings).toContain('释义');
+    expect(headings).toContain('词典核对');
+  });
+
+  it('屏幕变体照旧有按钮（别把打印变体的改动带到默认上）', () => {
+    render(<EntryCard entry={ENTRY} books={[]} existing={null} onSave={noop} onCreateBook={noop} onExportPdf={noop} />);
+    expect(document.querySelector('.save-bar')).toBeTruthy();
+    expect(screen.getByText('导出 PDF')).toBeTruthy();
+  });
+});
+
+describe('PrintSheet 打印页', () => {
+  it('单个词条：只有一张卡片、没有整本封面', () => {
+    render(<PrintSheet job={{ kind: 'entry', entry: ENTRY }} />);
+    expect(document.querySelectorAll('.print-sheet .entry-card').length).toBe(1);
+    expect(document.querySelector('.print-cover')).toBeNull();
+  });
+
+  it('整本：有封面（本子名 + 词条数 + 导出时间）且每个词条都在', () => {
+    const book = { id: 'b1', name: '英语文摘2026', entries: [ENTRY, { ...ENTRY, id: 'wb-2', head: 'enshrine' }, { ...ENTRY, id: 'wb-3', head: 'resilient' }] };
+    render(<PrintSheet job={{ kind: 'book', book }} />);
+    expect(document.querySelector('.print-cover h1').textContent).toBe('英语文摘2026');
+    expect(document.querySelector('.print-cover').textContent).toContain('共 3 个词条');
+    expect(document.querySelector('.print-cover').textContent).toContain('导出');
+    expect(document.querySelectorAll('.print-sheet .entry-card').length).toBe(3);
+    expect(document.body.textContent).toContain('enshrine');
+  });
+
+  it('空本子也能导出（不报错，给出说明）', () => {
+    render(<PrintSheet job={{ kind: 'book', book: { id: 'b1', name: '空的', entries: [] } }} />);
+    expect(document.querySelectorAll('.print-sheet .entry-card').length).toBe(0);
+    expect(document.body.textContent).toContain('这个本子还是空的');
+  });
+
+  it('自测题：答案与解析要带上（纸张上没法点「显示答案」）', () => {
+    render(<PrintSheet job={{ kind: 'quiz', quiz: QUIZ }} />);
+    expect(document.querySelector('.print-sheet .quiz-answers')).toBeTruthy();
+    expect(document.body.textContent).toContain('object 作动词要接 to');
+  });
+
+  it('没有任务时什么都不渲染', () => {
+    const { container } = render(<PrintSheet job={null} />);
+    expect(container.querySelector('.print-sheet')).toBeNull();
   });
 });

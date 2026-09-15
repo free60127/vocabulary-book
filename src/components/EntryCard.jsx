@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
+import { Check, FileDown, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { speak } from '../speak.js';
 
@@ -71,9 +71,13 @@ function DictSection({ dict }) {
  * 排序有讲究：**先给结论（释义/词性/色彩），再给用法（场景/搭配），最后才是对比与例句**。
  * 学习者是先想知道"这词什么意思、能不能用"，再关心"和近义词差在哪"。
  */
-export default function EntryCard({ entry, books, existing, onSave, onCreateBook }) {
+export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen' }) {
   const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
   const saved = Boolean(existing);
+  // 打印/导出 PDF 时去掉一切交互件：朗读按钮、保存栏在纸上毫无意义，只会占地方。
+  // 用 variant 显式区分，而不是靠 @media print 去 display:none —— 那样很容易漏（漏了就是
+  // PDF 里印出一排按钮），而且组件单测也测不到。
+  const forPrint = variant === 'print';
   const m = entry.mnemonic || {};
   const dict = entry.dict || null;
   const conflicts = entry.dictConflicts || null;
@@ -89,7 +93,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
         <h1>
           {entry.head}
           {entry.phonetic ? <span className="phonetic">{entry.phonetic}</span> : null}
-          <button className="icon-btn" title="朗读" aria-label="朗读" onClick={() => speak(entry.head)}><Volume2 size={16} /></button>
+          {forPrint ? null : <button className="icon-btn" title="朗读" aria-label="朗读" onClick={() => speak(entry.head)}><Volume2 size={16} /></button>}
         </h1>
         <DictBadge dict={dict} conflicts={conflicts} />
         <div className="chips chips-meta">
@@ -142,7 +146,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
               <div className="syn-head">
                 <strong className="syn-word">{s.word}</strong>
                 {s.phonetic ? <span className="muted small">{s.phonetic}</span> : null}
-                <button className="icon-btn" title="朗读" aria-label="朗读" onClick={() => speak(s.word)}><Volume2 size={13} /></button>
+                {forPrint ? null : <button className="icon-btn" title="朗读" aria-label="朗读" onClick={() => speak(s.word)}><Volume2 size={13} /></button>}
                 {s.register ? <span className="syn-meta">{s.register}</span> : null}
                 {s.tone ? <span className="syn-meta">{s.tone}</span> : null}
                 {s.strength ? <span className="syn-meta">{s.strength}</span> : null}
@@ -153,7 +157,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
               {s.example ? (
                 <div className="example-line">
                   <em>{s.example}</em>
-                  <button className="icon-btn" title="朗读例句" aria-label="朗读例句" onClick={() => speak(s.example)}><Volume2 size={12} /></button>
+                  {forPrint ? null : <button className="icon-btn" title="朗读例句" aria-label="朗读例句" onClick={() => speak(s.example)}><Volume2 size={12} /></button>}
                   {s.exampleCn ? <span>{s.exampleCn}</span> : null}
                 </div>
               ) : null}
@@ -180,7 +184,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
             <div key={i} className="summary-card">
               <div className="example-line">
                 <em>{x.en}</em>
-                <button className="icon-btn" title="朗读例句" aria-label="朗读例句" onClick={() => speak(x.en)}><Volume2 size={12} /></button>
+                {forPrint ? null : <button className="icon-btn" title="朗读例句" aria-label="朗读例句" onClick={() => speak(x.en)}><Volume2 size={12} /></button>}
                 <span>{x.cn}</span>
               </div>
               {x.note ? <div className="muted small">{x.note}</div> : null}
@@ -210,8 +214,14 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
 
       <DictSection dict={dict} />
 
+      {forPrint ? null : (
       <div className="save-bar">
         {saved ? <span className="saved-flag"><Star size={14} fill="currentColor" />已在「{existing.name}」里</span> : null}
+        {onExportPdf ? (
+          <button className="ghost-btn" onClick={() => onExportPdf(entry)} title="导出这一个词条的 PDF（在打印对话框里选「另存为 PDF」）">
+            <FileDown size={15} />导出 PDF
+          </button>
+        ) : null}
         {books.length ? (
           <select className="ocr-mode" value={bookId} onChange={(e) => setBookId(e.target.value)} title="选一个单词本">
             {books.map((b) => <option key={b.id} value={b.id}>{b.name}（{b.entries.length}）</option>)}
@@ -221,6 +231,7 @@ export default function EntryCard({ entry, books, existing, onSave, onCreateBook
           <Plus size={16} />{books.length ? (saved ? '更新到单词本' : '加入单词本') : '新建单词本并加入'}
         </button>
       </div>
+      )}
     </article>
   );
 }

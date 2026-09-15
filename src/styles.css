@@ -978,3 +978,35 @@ mark.hl { background: #ffe3e3; color: inherit; padding: 0 2px; border-radius: 2p
 /* 云同步里"这件事还没完成"的状态文案（例如：账号里有码、本机还没有）。
    用金色而不是红色 —— 它不是错误，是一个待办，别把用户吓一跳。 */
 .warn-text { color: #8a5a00; }
+
+/* ---------- 打印 / 导出 PDF ----------
+   统一的打印页：屏幕上看不见，点"导出 PDF"时给 body 加 printing，
+   那一刻只显示 .print-sheet（词条卡 / 整本 / 自测题都走这一套）。
+   为什么不用 @media print 直接打印当前页面：屏幕上那套布局里有侧栏、按钮、弹窗，
+   想靠一条条 display:none 藏干净，加一个新按钮就会漏一个（漏了就是 PDF 里印出一排按钮）。 */
+.print-sheet { display: none; }
+.print-cover { margin: 0 0 18px; padding-bottom: 12px; border-bottom: 2px solid #1c2733; }
+.print-cover-eyebrow { font-size: 11px; letter-spacing: .12em; color: #5f6b78; margin-bottom: 4px; }
+.print-cover h1 { font-size: 24px; margin: 0 0 6px; }
+.print-cover p { margin: 0; font-size: 12.5px; }
+
+@media print {
+  /* 打印时只留打印页 */
+  body.printing .app { display: none !important; }
+  body.printing .print-sheet { display: block !important; }
+  .print-sheet { background: #fff; color: #1c2733; }
+  .print-sheet .entry-card {
+    border: none !important; box-shadow: none !important; border-radius: 0 !important;
+    padding: 0 !important; max-width: none !important;
+  }
+  /* 整本导出：每个词条另起一页 —— 挤在同一页里既难读也没法单独抽出来复习 */
+  .print-sheet .entry-card + .entry-card { break-before: page; page-break-before: always; }
+  /* 板块内部不要被分页切开（释义/近义词拆两页最难读） */
+  .print-sheet .sheet-section, .print-sheet .summary-card, .print-sheet .dict-facts > div {
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  /* 屏幕上靠交互展开的内容，PDF 里要直接铺开 */
+  .print-sheet .quiz-answers { display: block !important; }
+  /* 朗读/保存这类交互件在纸上毫无意义 */
+  .print-sheet .icon-btn, .print-sheet .save-bar, .print-sheet .result-toolbar { display: none !important; }
+}

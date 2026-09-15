@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  BookMarked, ChevronRight, Cloud, Flame, FolderPlus, LoaderCircle, LogIn,
+  BookMarked, ChevronRight, Cloud, FileDown, Flame, FolderPlus, LoaderCircle, LogIn,
   PanelLeftClose, PanelLeftOpen, Search, Settings, Sparkles, Trash2, Volume2, X,
 } from 'lucide-react'
 import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, pullCloudSync, pushCloudSync } from './api.js'
@@ -30,6 +30,7 @@ import {
   saveToken, saveUser, signIn, signOut as apiSignOut, signOutAll as apiSignOutAll, signUp,
 } from './account.js'
 import EntryCard from './components/EntryCard.jsx'
+import PrintSheet from './components/PrintSheet.jsx'
 import QuizPane from './components/QuizPane.jsx'
 import BackupModal from './components/modals/BackupModal.jsx'
 import AuthModal from './components/modals/AuthModal.jsx'
@@ -55,6 +56,27 @@ export default function App() {
    * ⚠️ 手机端必须**默认收起**：≤900px 时侧栏是 position:fixed 的整屏抽屉，
    * 默认展开就会把主界面整个盖住（实测在 390px 宽的手机上页面完全没法用）。
    * 桌面端则记住上次的选择。 */
+  /* ---------- 打印 / 导出 PDF ----------
+   * 统一的出口：词条、整本、自测题都走这里。屏幕上看不见的 .print-sheet 负责承载内容，
+   * 打印那一刻由 body.printing 把主界面藏起来（见 styles.css 的 @media print）。
+   * 早先只有自测题能导出，而且各写各的 window.print() —— 加一个"导出这个/整本"就必然漏样式。 */
+  const [printJob, setPrintJob] = useState(null)
+  useEffect(() => {
+    if (!printJob) return undefined
+    document.body.classList.add('printing')
+    // afterprint 在"取消"和"打印完成"后都会触发，用它收尾最稳；
+    // 再挂一个兜底定时器，防止某些环境不触发 afterprint 导致 body 永远停在 printing。
+    const cleanup = () => { document.body.classList.remove('printing'); setPrintJob(null) }
+    window.addEventListener('afterprint', cleanup)
+    const fire = setTimeout(() => window.print(), 80)
+    const safety = setTimeout(cleanup, 60_000)
+    return () => {
+      clearTimeout(fire); clearTimeout(safety)
+      window.removeEventListener('afterprint', cleanup)
+      document.body.classList.remove('printing')
+    }
+  }, [printJob])
+
   /* 上次同步时间的"显示用"副本：syncMeta 只在弹窗里读，顶栏也要能看到才安心 */
   const [lastSyncAt, setLastSyncAt] = useState(() => Number(loadSyncMeta().lastSyncAt) || 0)
   const [sidebarOpen, setSidebarOpen] = useState(() => {
@@ -654,6 +676,7 @@ export default function App() {
   }, [activeBook, bookQuery, kindFilter, sortMode, schedule])
 
   return (
+    <>
     <div className="app">
       {/* 手机端点侧栏外面任意处即可收起（桌面端这条规则 display:none，不生效） */}
       {sidebarOpen ? <div className="sidebar-backdrop" onClick={toggleSidebar} aria-hidden="true" /> : null}
@@ -745,6 +768,7 @@ export default function App() {
         ) : view === 'quiz' ? (
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
+            onExportPdf={() => setPrintJob({ kind: 'quiz', quiz })}
             onRegenerate={() => setQuizSetupOpen(true)} onExit={() => setView('search')} />
         ) : view === 'book' && activeBook ? (
           <section className="editor">
@@ -766,6 +790,12 @@ export default function App() {
                 </select>
                 <button className="ghost-btn sm" onClick={() => { setQuizScope('book'); setQuizSetupOpen(true) }} disabled={!activeBook.entries.length}>
                   <Sparkles size={14} />用这个本子出题
+                </button>
+                {/* 整本导出：**不受上面的筛选/搜索影响**，永远是本子的全部词条 ——
+                    "导出词汇本"就该是整本，导出到一半发现缺词才是坑 */}
+                <button className="ghost-btn sm" onClick={() => setPrintJob({ kind: 'book', book: activeBook })}
+                  disabled={!activeBook.entries.length} title="把本子里全部词条导出成 PDF（不受筛选影响）">
+                  <FileDown size={14} />导出本子 PDF
                 </button>
               </div>
               {activeBook.entries.length === 0 ? <div className="muted">这个本子还是空的：查一个词就能存进来</div> : null}
@@ -825,6 +855,7 @@ export default function App() {
 
             {entry ? (
               <EntryCard entry={entry} books={books} existing={findEntryBook(books, entry.id)}
+                onExportPdf={(e) => setPrintJob({ kind: 'entry', entry: e })}
                 onSave={saveToBook} onCreateBook={createAndSave} />
             ) : null}
           </section>
@@ -880,6 +911,10 @@ export default function App() {
         </div>
       ) : null}
     </div>
+
+      {/* 打印页放在 .app 之外：body.printing 时把 .app 整个藏起来、只留它 */}
+      <PrintSheet job={printJob} />
+    </>
   )
 }
 

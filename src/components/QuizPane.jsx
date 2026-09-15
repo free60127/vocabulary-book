@@ -10,14 +10,17 @@ const TYPE_LABEL = { choice: '选择', fill: '填空', translate: '翻译', corr
  *  · **默认不显示答案**，点「显示答案」才展开 —— 否则一眼扫到答案，题就白做了；
  *  · 答案与解析**统一放在最后**，不是跟在每题下面 —— 打印出来做题时不会提前看到。
  */
-export default function QuizPane({ quiz, showAnswers, busy, onToggleAnswers, onCopy, onRegenerate, onExit }) {
+export default function QuizPane({ quiz, showAnswers, busy, onToggleAnswers, onCopy, onRegenerate, onExit, onExportPdf }) {
   const questions = (quiz && quiz.questions) || [];
   return (
     <section className="editor">
       <div className="result-toolbar">
         <button className="ghost-btn" onClick={onExit}><RotateCcw size={15} />返回</button>
         <button className="ghost-btn" onClick={onCopy} disabled={!questions.length}><ClipboardCopy size={15} />复制题目</button>
-        <button className="ghost-btn" onClick={() => window.print()} disabled={!questions.length}><Printer size={15} />导出 PDF</button>
+        {/* 导出走 App 的统一出口（隐藏的打印页 + 浏览器"另存为 PDF"）——
+            以前这里直接 window.print()，打印的是当前页面；加上"导出词条/整本"之后再这么干，
+            三处各写各的必然漏样式。现在都经过 printJob，一套 @media print 规则管住。 */}
+        <button className="ghost-btn" onClick={() => (onExportPdf ? onExportPdf() : window.print())} disabled={!questions.length}><Printer size={15} />导出 PDF</button>
         <button className="ghost-btn" onClick={onRegenerate} disabled={busy}>{busy ? '出题中…' : '换一套'}</button>
         <button className="primary-btn" onClick={onToggleAnswers} disabled={!questions.length}>
           {showAnswers ? '隐藏答案' : '显示答案'}
