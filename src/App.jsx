@@ -363,9 +363,22 @@ export default function App() {
         pushedBooks: res.pushed ? res.pushed.books : undefined,
         pushedEntries: res.pushed ? res.pushed.entries : undefined,
       }
+      // 推送后**回读校验**：这一条是为"推上去了但云端还是空的"那类静默故障加的。
+      // 只信 pushCloudSync 的 200 是不够的 —— 数据可能在服务端被清洗掉、或写到了别的地方；
+      // 回读一次拿真实数量对比，对不上就当场说出来（并给出「用本机覆盖云端」这条出路）。
+      let verified = true
+      try {
+        const back = await pullCloudSync(code)
+        const rb = (back && back.data && back.data.books) || []
+        if (mine.books > 0 && rb.length < mine.books) verified = false
+      } catch { /* 回读失败不影响本次同步结论，只是少一层确认 */ }
+      meta.verified = verified
       saveSyncMeta(meta); setSyncMeta(meta)
       const localPart = `本机 ${mine.books} 个本子（${mine.entries} 个词条）`
-      if (manual) {
+      if (!verified) {
+        setSyncTip(`⚠️ 同步异常：本机 ${mine.books} 个本子已上传，但云端回读只有更少的内容。`
+          + '请点「用本机覆盖云端」把本机数据强制推上去，再在另一台设备点「立即同步」。')
+      } else if (manual) {
         if (a.booksAdded || a.entriesAdded) setSyncTip(`同步完成：从云端新增 ${a.booksAdded} 个本子、${a.entriesAdded} 个词条 · ${localPart}`)
         else if (res.cloudBefore && res.cloudBefore.books === 0 && mine.books > 0) {
           // 本机有数据、云端却是空的 —— 这多半不是"已是最新"，而是哪里没对上，

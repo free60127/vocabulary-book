@@ -83,6 +83,11 @@ export default function BackupModal({
               {/* 同步出问题时，用户唯一能自己判断的就是"两边各有多少" ——
                   以前界面上一个数字都没有，只能看到一句"同步完成"，于是"手机没同步到"
                   既看不出原因、也不知道该点哪儿。这里把两个数摆出来。 */}
+              {syncMeta && syncMeta.verified === false ? (
+                <p className="warn-text small" style={{ margin: '2px 0 0' }}>
+                  ⚠️ 上次同步回读校验没通过：云端内容比本机少。点「用本机覆盖云端」可强制推上去。
+                </p>
+              ) : null}
               {syncMeta && syncMeta.lastSyncAt ? (
                 <p className="muted small" style={{ margin: '2px 0 0' }}>
                   本机 <b>{syncMeta.localEntries != null ? `${syncMeta.localBooks} 个本子（${syncMeta.localEntries} 个词条）` : '—'}</b>

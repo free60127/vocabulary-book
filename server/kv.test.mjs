@@ -85,6 +85,46 @@ function spyFetch(sink) {
   check('额度计数用的是带前缀的键', seen.every((k) => k.startsWith('vb:spent:')), seen.join(','));
 }
 
+/* ---------- 改前缀不能把老数据扔掉（一次性认领）----------
+   真实事故：原本写死 bts:sync:，改成 vb:sync: 之后，老用户那串码在新命名空间里读不到，
+   客户端把 404 当"空云端"照常推送 —— 结果是"电脑有数据、手机同步过来什么都没有"，
+   而且界面上没有任何报错。所以旧键里有同一串码时必须认领过来。 */
+{
+  const seen = [];
+  const store = new Map();
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const cmd = JSON.parse(opts.body);
+    const key = String(cmd[1]);
+    seen.push(key);
+    if (cmd[0] === 'GET') return { ok: true, text: async () => JSON.stringify({ result: store.has(key) ? store.get(key) : null }) };
+    if (cmd[0] === 'SET') { store.set(key, String(cmd[2])); return { ok: true, text: async () => JSON.stringify({ result: 'OK' }) }; }
+    return { ok: true, text: async () => JSON.stringify({ result: null }) };
+  };
+  const legacyDoc = JSON.stringify({ version: 7, updatedAt: 1, data: { books: [{ id: 'bk-old', name: '老数据', entries: [] }] } });
+  store.set('bts:sync:OLDC0DE', legacyDoc);
+
+  const store2 = createUpstashStore({ url: 'https://x.upstash.io', token: 't' });
+  const got = await store2.read('OLDC0DE');
+  check('新键没有、旧键有 → 把旧数据认领过来（而不是当成空云端）',
+    got && got.version === 7 && got.data.books[0].name === '老数据', JSON.stringify(got && got.version));
+  check('认领时会写进新键，之后就走新键了', store.get('vb:sync:OLDC0DE') === legacyDoc && store.has('vb:sync:OLDC0DE'));
+  seen.length = 0;
+  await store2.read('OLDC0DE');
+  check('第二次只查新键（不重复翻旧键）', seen.length === 1 && seen[0] === 'vb:sync:OLDC0DE', seen.join(','));
+
+  seen.length = 0;
+  const miss = await store2.read('NOTEXIST');
+  check('两边都没有就是真的没有', miss === null && seen.join(',') === 'vb:sync:NOTEXIST,bts:sync:NOTEXIST', seen.join(','));
+
+  const custom = createUpstashStore({ url: 'https://x.upstash.io', token: 't', prefix: 'zz:' });
+  seen.length = 0;
+  await custom.read('OLDC0DE');
+  check('显式指定前缀（多应用共库）时不翻旧键，免得读到别人的数据',
+    seen.join(',') === 'zz:sync:OLDC0DE', seen.join(','));
+  globalThis.fetch = orig;
+}
+
 /* ---------- 四个命名空间互不重叠，且都与回译本错开 ---------- */
 {
   const ns = {

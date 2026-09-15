@@ -186,9 +186,23 @@ const CAS_LUA = [
 ].join('\n');
 
 /** Upstash Redis REST 驱动（用 JSON 数组形式发命令）。 */
-export function createUpstashStore({ url, token, prefix }) {
+export function createUpstashStore({ url, token, prefix, legacyPrefix }) {
   // 默认取本应用的 KV_PREFIX（原来是写死的 'bts:sync:' —— 和姊妹项目重合，合用同一个库会串数据）
   const NS = String(prefix === undefined ? kvPrefix() : prefix) + 'sync:';
+  /**
+   * 旧命名空间（改 KV_PREFIX 之前用的那个）。
+   *
+   * 为什么要有它：这个项目原本写死 `bts:sync:`，改成 `vb:sync:` 时**线上已经有数据了** ——
+   * 只改前缀不做兼容，等于把老用户的云端数据扔在旧键上：他自己那串码在新命名空间里"不存在"，
+   * 客户端又把 404 当成"空云端"照常往下走，于是**推送一份空数据上去**，
+   * 表现就是"电脑有 1 个本子，手机同步过来什么都没有"，而且界面上没有任何报错。
+   * 所以这里做一次性认领：新键读不到、旧键有，就把旧的那份搬到新键再返回（幂等）。
+   * 只在用默认前缀时启用 —— 显式指定前缀（多应用共库）时不去翻别人的键。
+   */
+  const LEGACY = legacyPrefix === undefined
+    ? (String(prefix === undefined ? kvPrefix() : prefix) === 'vb:' ? 'bts:sync:' : '')
+    : String(legacyPrefix || '');
+  let adoptedOnce = false;
   const endpoint = String(url).replace(/\/+$/, '');
   const call = async (command) => {
     const r = await fetch(endpoint, {
@@ -214,7 +228,17 @@ export function createUpstashStore({ url, token, prefix }) {
     durable: true,
     get casMode() { return casMode; },
     async read(code) {
-      return parse(await call(['GET', NS + code]));
+      const mine = parse(await call(['GET', NS + code]));
+      if (mine || !LEGACY) return mine;
+      // 新键没有 → 看看旧键里有没有同一串码的旧数据（改前缀之前写的）
+      const older = parse(await call(['GET', LEGACY + code]));
+      if (!older) return null;
+      if (!adoptedOnce) {
+        adoptedOnce = true;
+        console.warn('[sync] 在旧命名空间 ' + LEGACY + ' 里发现该同步码的历史数据，已迁移到 ' + NS + '（KV_PREFIX 变更的兼容处理）');
+      }
+      await call(['SET', NS + code, JSON.stringify(older)]);
+      return older;
     },
     async write(code, doc) {
       await call(['SET', NS + code, JSON.stringify(doc)]);
