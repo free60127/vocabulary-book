@@ -299,6 +299,29 @@ try {
   ok('账号弹窗可打开', auth.title === '账号', auth.title || '');
   ok('未启用账号时给出解释而不是死按钮', auth.disabled === true && /没有启用账号功能/.test(auth.note), `disabled=${auth.disabled} ${auth.note}`);
 
+  /* ---------- ⑤b 回到页面自动同步 + 同步自检 ----------
+   * 用户要求"电脑新增词汇，手机自动同步，反之亦然" —— 只在启动时同步一次是不够的
+   * （手机上页面长期驻留）。这里验证：切回前台会触发一次同步，且 60 秒内不重复打。 */
+  {
+    await page.evaluate(() => { window.__syncCalls = 0 })
+    await page.route('**/api/sync/*', async (route) => {
+      const url = route.request().url()
+      if (route.request().method() === 'GET') await page.evaluate(() => { window.__syncCalls += 1 })
+      await route.continue()
+    })
+    await page.evaluate(() => {
+      // 把上次同步时间推远，越过 60 秒节流
+      const meta = JSON.parse(localStorage.getItem('vb-sync-meta') || '{}')
+      localStorage.setItem('vb-sync-meta', JSON.stringify({ ...meta, lastSyncAt: Date.now() - 10 * 60_000 }))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await sleep(2500)
+    const calls = await page.evaluate(() => window.__syncCalls || 0)
+    ok('切回前台会自动同步一次（不用手点「立即同步」）', calls >= 1, `触发 ${calls} 次拉取`);
+    await page.unroute('**/api/sync/*')
+  }
+
   /* ---------- ⑥ 手机端：侧栏抽屉必须能开、能关 ----------
    * 用户报的原话："手机端打开这个左边的栏没法收缩关掉"。
    * 根因是 CSS 里 .sidebar-close / .sidebar-backdrop / .side-toggle 三个类的样式都在，

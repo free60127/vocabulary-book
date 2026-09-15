@@ -613,6 +613,35 @@ export default function App() {
     runSync(false, syncCode)
   }, [syncCode, runSync])
 
+  /**
+   * 回到页面时自动同步 —— 用户的原话是"我想之后电脑新增词汇，手机自动同步，反之亦然"。
+   * 只在启动时同步一次是不够的：手机上的页面经常一直开着（加到主屏后更是长期驻留），
+   * 那样电脑新存的词永远不会自己出现，每次都得手动点「立即同步」。
+   *
+   * 触发时机：切回前台（visibilitychange）+ 窗口获得焦点 + 每 5 分钟兜底一次。
+   * 两条节流：距上次同步不足 60 秒不重复跑；同步进行中 runSync 自己会拦。
+   * 用 runSync(false) —— 后台同步不该弹提示（没新内容时用户不该被打扰），
+   * 只有真的同步到了新内容才会 flash 一句。
+   */
+  useEffect(() => {
+    if (!syncCode) return
+    const maybeSync = () => {
+      if (document.visibilityState !== 'visible') return
+      const last = Number(loadSyncMeta().lastSyncAt) || 0
+      if (Date.now() - last < 60_000) return
+      runSync(false, syncCode)
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') maybeSync() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', maybeSync)
+    const timer = setInterval(maybeSync, 5 * 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', maybeSync)
+      clearInterval(timer)
+    }
+  }, [syncCode, runSync])
+
   /* ---------- 本子内的筛选与排序 ---------- */
   const filteredBookEntries = useMemo(() => {
     const base = activeBook ? activeBook.entries : []
