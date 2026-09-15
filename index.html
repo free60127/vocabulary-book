@@ -20,6 +20,21 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>单词本 · 查词 · 复习 · 自测</title>
+    <!--
+      外观：在样式生效前就把 <html data-theme> 定下来。
+      为什么必须同步执行：暗色用户如果等 React 起来再切，会先看到一整帧白屏（闪一下很难受）。
+      与 src/theme.js 的规则保持一致：system → 看系统；否则用用户钉住的那一种。
+    -->
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem('vb-theme') || 'system';
+          var dark = pref === 'dark' || (pref === 'system'
+            && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -782,8 +782,8 @@ body.drawer-open { overflow: hidden; }
    比白天多，而"再点一次切换"对绝大多数人是多余的（想强制某一种，系统里就能设）。
    ⚠️ 用 `screen and` 限定：打印时必须还是浅色（深色底打印出来是一片墨）。
    ========================================================================== */
-@media screen and (prefers-color-scheme: dark) {
-  :root {
+/* 深色：由 <html data-theme="dark"> 驱动（跟随系统时由脚本在首屏前写入） */
+:root[data-theme='dark']{
     --bg: #0f1418; --panel: #171e24; --line: #2a343d; --text: #e7edf2; --muted: #9fb0bd;
     /* 品牌色在深底上要提亮，否则对比度掉到 3:1 以下 */
     --brand: #4c9dff; --brand-dark: #2f7fe0; --teal: #48c3b4; --gold: #e0b155;
@@ -795,39 +795,39 @@ body.drawer-open { overflow: hidden; }
     --ok-bg: #162b28; --ok-line: #2b524c; --ok-ink: #7fd8c9;
     --info-bg: #1b2733; --info-line: #2f4a66;
   }
-  html { color-scheme: dark; }
-  /* 头像块/主按钮上的白字在深色下依然可读，但阴影要收一点，否则发灰 */
-  .brand-mark { box-shadow: none; }
-  .sheet, .panel, .modal, .entry-card { box-shadow: none; }
-  /* 输入框：深色下用比面板更暗的底，才能看出"这里能输入" */
-  .search-input, .ocr-mode, .modal input, .auth-label input, .fav-search, .sync-code, .lesson-search input {
+:root[data-theme='dark']{ color-scheme: dark; }/* 头像块/主按钮上的白字在深色下依然可读，但阴影要收一点，否则发灰 */
+:root[data-theme='dark']
+  .brand-mark{ box-shadow: none; }
+:root[data-theme='dark'] .sheet, :root[data-theme='dark'] .panel, :root[data-theme='dark'] .modal, :root[data-theme='dark'] .entry-card{ box-shadow: none; }/* 输入框：深色下用比面板更暗的底，才能看出"这里能输入" */
+:root[data-theme='dark']
+  .search-input, :root[data-theme='dark'] .ocr-mode, :root[data-theme='dark'] .modal input, :root[data-theme='dark'] .auth-label input, :root[data-theme='dark'] .fav-search, :root[data-theme='dark'] .sync-code, :root[data-theme='dark'] .lesson-search input{
     background: var(--bg); color: var(--text);
   }
-  .search-input::placeholder, input::placeholder, textarea::placeholder { color: #7b8b98; }
-  /* 词根词缀块：浅色下是淡紫底，深色下换成暗紫底（原来直接是白底 + 淡紫字，完全看不清） */
-  .vocab-morph { background: #201b2e; border-left-color: var(--purple); }
-  /* 输入框自己不需要底色：深色下那块更暗的小方块看着像"嵌套了一层" */
-  .search-input { background: transparent; }
-  /* 词典核对条：浅色下靠底色区分，深色下靠左边框 */
-  .dict-badge { background: var(--ok-bg); }
-  .dict-badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
-  /* 卡片里那些"浅灰小底"在深色下要稍微亮于面板，否则看不清边界 */
-  .start-guide { background: var(--fill-2); }
-  .mor-phrase, .morph-line, .chips .chip { border-color: var(--line); }
-  /* 结果里用到的白底小块 */
-  .quiz-item, .summary-card, .fav-item, .lib-preview { background: var(--fill-2); }
-  .dict-facts dd, .sheet-section { border-color: var(--line); }
-  /* 顶栏与侧栏的边界在深色下要更清楚一点 */
-  .topbar { border-bottom-color: var(--line); }
-  .sidebar { border-right: 1px solid rgba(255,255,255,.05); }
-  .more-menu { box-shadow: 0 14px 34px rgba(0,0,0,.5); }
-  .more-menu button:hover { background: var(--hover); }
-  .icon-btn:hover, .side-toggle:hover, .entry-open:hover { background: var(--hover); }
-  /* 复习钉底的评分条：深色下用面板色，别透出下面的正文 */
-  .grade-bar { background: var(--bg); }
-  /* 提示条在深色下是"浅一点的浮层"，不再用近黑的墨绿 */
-  .fav-tip.toast { box-shadow: 0 8px 22px rgba(0,0,0,.45); }
-}
+:root[data-theme='dark'] .search-input::placeholder, :root[data-theme='dark'] input::placeholder, :root[data-theme='dark'] textarea::placeholder{ color: #7b8b98; }/* 词根词缀块：浅色下是淡紫底，深色下换成暗紫底（原来直接是白底 + 淡紫字，完全看不清） */
+:root[data-theme='dark']
+  .vocab-morph{ background: #201b2e; border-left-color: var(--purple); }/* 输入框自己不需要底色：深色下那块更暗的小方块看着像"嵌套了一层" */
+:root[data-theme='dark']
+  .search-input{ background: transparent; }/* 词典核对条：浅色下靠底色区分，深色下靠左边框 */
+:root[data-theme='dark']
+  .dict-badge{ background: var(--ok-bg); }
+:root[data-theme='dark'] .dict-badge.warn{ background: var(--warn-bg); color: var(--warn-ink); }/* 卡片里那些"浅灰小底"在深色下要稍微亮于面板，否则看不清边界 */
+:root[data-theme='dark']
+  .start-guide{ background: var(--fill-2); }
+:root[data-theme='dark'] .mor-phrase, :root[data-theme='dark'] .morph-line, :root[data-theme='dark'] .chips .chip{ border-color: var(--line); }/* 结果里用到的白底小块 */
+:root[data-theme='dark']
+  .quiz-item, :root[data-theme='dark'] .summary-card, :root[data-theme='dark'] .fav-item, :root[data-theme='dark'] .lib-preview{ background: var(--fill-2); }
+:root[data-theme='dark'] .dict-facts dd, :root[data-theme='dark'] .sheet-section{ border-color: var(--line); }/* 顶栏与侧栏的边界在深色下要更清楚一点 */
+:root[data-theme='dark']
+  .topbar{ border-bottom-color: var(--line); }
+:root[data-theme='dark'] .sidebar{ border-right: 1px solid rgba(255,255,255,.05); }
+:root[data-theme='dark'] .more-menu{ box-shadow: 0 14px 34px rgba(0,0,0,.5); }
+:root[data-theme='dark'] .more-menu button:hover{ background: var(--hover); }
+:root[data-theme='dark'] .icon-btn:hover, :root[data-theme='dark'] .side-toggle:hover, :root[data-theme='dark'] .entry-open:hover{ background: var(--hover); }/* 复习钉底的评分条：深色下用面板色，别透出下面的正文 */
+:root[data-theme='dark']
+  .grade-bar{ background: var(--bg); }/* 提示条在深色下是"浅一点的浮层"，不再用近黑的墨绿 */
+:root[data-theme='dark']
+  .fav-tip.toast{ box-shadow: 0 8px 22px rgba(0,0,0,.45); }
+
 
 /* ==========================================================================
    复习增强：拼写模式 / 斩掉 / 收藏夹进复习 / 本轮完成
@@ -996,3 +996,22 @@ body.drawer-open { overflow: hidden; }
    对策：列表保持自然高度，改由 .side-section 自己滚动。 */
 .side-section { overflow-y: auto; }
 .side-section > .lesson-list { flex: none; }
+
+/* ---------- 主题切换（跟随系统 / 亮色 / 暗色） ----------
+   选择存在本机（vb-theme）。「跟随系统」由脚本在首屏前解析成 data-theme，
+   所以这里只需要「data-theme=dark」一种深色路径 —— 不必再维护一份媒体查询。
+   ⚠️ 打印必须回到浅色：深色底打印出来是一张墨纸，而且白底 + 浅色变量会变成看不见的字。 */
+@media print {
+  :root, :root[data-theme='dark'] {
+    --bg: #f4f6f8; --panel: #ffffff; --line: #e6eaf0; --text: #1c2733; --muted: #5f6b78;
+    --brand: #1f6feb; --brand-dark: #1857b8; --teal: #0f7a70; --gold: #9a6500;
+    --red: #c0392b; --blue: #3b6fd4; --purple: #7a5ac9; --green: #2f9e44;
+    --fill: #f2f5f8; --fill-2: #fbfcfd; --hover: #f0f3f6;
+    --rail: #10222e; --toast-bg: #10222e; --toast-fg: #eaf3f8;
+    --err-bg: #fdecec; --err-line: #f3c2c2; --err-ink: #a33;
+    --warn-bg: #fffaf0; --warn-line: #f0dcb4; --warn-ink: #8a5a00;
+    --ok-bg: #effaf7; --ok-line: #b9e1d8; --ok-ink: #176b62;
+    --info-bg: #eef5ff; --info-line: #cfe0ff;
+    color-scheme: light;
+  }
+}

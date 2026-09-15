@@ -11,9 +11,10 @@ import { useBooks } from './hooks/useBooks.js'
 import { useCloud } from './hooks/useCloud.js'
 import { useAuth } from './hooks/useAuth.js'
 import {
-  SIDE_STATE_KEY, loadFollowups, loadSettings, loadSpell, safeGet, safeSet, saveFollowups,
-  saveSettings, saveSpell,
+  SIDE_STATE_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet, safeSet,
+  saveFollowups, saveSettings, saveSpell, saveTheme,
 } from './storage.js'
+import { applyTheme } from './theme.js'
 import { findBookByHead, findEntryBook } from './wordbook.js'
 import { headKey, killedSet, nextDueAt } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
@@ -71,6 +72,8 @@ export default function App() {
     gradeEntry, exportBackup, importBackup,
   } = store
 
+  /* 外观：跟随系统 / 亮色 / 暗色（首屏由 index.html 的内联脚本先定，这里负责后续切换） */
+  const [theme, setTheme] = useState(loadTheme)
   const [settings, setSettings] = useState(loadSettings)
   // ⚠️ 必须走 safeGet：Safari 无痕 / 关闭站点数据时裸调 localStorage 会抛 SecurityError，
   // 而这里在**首次 render 的惰性初始化**里 —— 一抛就是整页白屏。
@@ -188,6 +191,20 @@ export default function App() {
 
   useEffect(() => { getStatus().then(setStatus).catch(() => setStatus(null)) }, [])
   useEffect(() => { safeSet('vb-level', level) }, [level])
+  /* 主题：写 <html data-theme>；选"跟随系统"时，系统主题变了要立刻跟上 */
+  useEffect(() => {
+    saveTheme(theme)
+    applyTheme(theme)
+    if (theme !== 'system' || typeof window === 'undefined' || !window.matchMedia) return undefined
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => applyTheme('system')
+    if (mq.addEventListener) mq.addEventListener('change', onChange)
+    else mq.addListener(onChange)          // 老 Safari
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange)
+      else mq.removeListener(onChange)
+    }
+  }, [theme])
   useEffect(() => { saveSpell(spell) }, [spell])
   useEffect(() => { saveFollowups(followups) }, [followups])
 
@@ -726,8 +743,15 @@ export default function App() {
             spellRun={spellRun}
             onToggleSpell={(on) => {
               setSpell(on)
-              // 在拼写阶段里把它关掉 = "我不拼了"：结束拼写轮，回到完成页
-              if (!on && spellRun) { setSpellRun(false); setPractice(false) }
+              // 在拼写阶段里关掉 = "我不拼了"：**结束这一轮**并落到"本轮完成"。
+              // 之前只把 spellRun 关掉，用户就被扔回普通复习、还得把剩下的词再走一遍 ——
+              // 他的原话是"关闭拼写模式，那就又需要重来一轮"。
+              if (!on && spellRun) {
+                setSpellRun(false)
+                setReviewIndex(reviewQueue ? reviewQueue.length : 0)
+                setRevealed(false)
+                flash('已结束拼写练习', TIP_NORMAL_MS)
+              }
             }}
             onRestartSpell={restartSpell}
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
@@ -770,7 +794,8 @@ export default function App() {
       </main>
 
       {settingsOpen ? (
-        <SettingsModal settings={settings} onClose={() => setSettingsOpen(false)}
+        <SettingsModal settings={settings} theme={theme} onThemeChange={setTheme}
+          onClose={() => setSettingsOpen(false)}
           onSave={(s) => { setSettings(s); saveSettings(s); setSettingsOpen(false); getStatus().then(setStatus).catch(() => {}) }} />
       ) : null}
 

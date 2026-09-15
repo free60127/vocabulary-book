@@ -669,6 +669,25 @@ async function runProfile(browser, p) {
       await page.waitForTimeout(400);
       check(p.id, '点「用拼写再过一遍」进入拼写练习', /拼写练习/.test(await page.locator('.review-pane').innerText().catch(() => '')));
       check(p.id, '拼写模式出现输入框', (await page.locator('.spell-input').count()) === 1);
+
+      /* 拼写中途关掉开关 = 结束这一轮，不该被扔回普通复习把剩下的词再走一遍
+         （用户原话："关闭拼写模式，那就又需要重来一轮"） */
+      // ⚠️ 用 click() 而不是 uncheck()：关掉开关会让这一轮立刻结束，开关随卡片一起卸载，
+      // 而 uncheck() 会一直等"状态变成未勾选"（元素都没了）→ 必然超时（实测踩过）
+      await page.locator('.spell-switch input').click();
+      await page.waitForTimeout(500);
+      const afterOff = await page.evaluate(() => ({
+        done: Boolean(document.querySelector('.review-done-line')),
+        card: Boolean(document.querySelector('.review-word')),
+        spellInput: document.querySelectorAll('.spell-input').length,
+        gradeBar: document.querySelectorAll('.grade-bar').length,
+      }));
+      check(p.id, '拼写中途关掉开关 → 直接结束这一轮（不是回到普通复习重来）',
+        afterOff.done && !afterOff.card && !afterOff.gradeBar && !afterOff.spellInput, short(afterOff));
+      // 继续后面的拼写检查：从完成页重新进拼写
+      await page.locator('.review-done-actions .primary-btn').click();
+      await page.waitForTimeout(400);
+      check(p.id, '从完成页可以重新进入拼写练习', (await page.locator('.spell-input').count()) === 1);
       const shownHead = await page.evaluate(() => document.querySelector('.review-word strong')?.textContent.trim());
       check(p.id, '拼写模式不显示词头（否则就是抄）', !/^[a-z]+$/i.test(String(shownHead)) && String(shownHead).length > 0, String(shownHead).slice(0, 14));
 
@@ -1023,6 +1042,32 @@ async function runEdgeCases(browser) {
     check(P, '深色模式：正文对比度 ≥ 4.5', bad.length === 0,
       bad.length ? bad.map((r) => `${r.sel} ${r.ratio}`).join(' · ') : `最低 ${worst.map((r) => r.sel + ' ' + r.ratio).join(' / ')}`);
     await page.screenshot({ path: path.join(SHOTS, 'dark-card.png'), fullPage: false }).catch(() => {});
+
+    /* 外观可选：跟随系统 / 亮色 / 暗色 —— 系统是暗色时也要能钉住亮色 */
+    {
+      await page.locator('.side-toggle').click();
+      await page.waitForTimeout(300);
+      await page.locator('.side-footer button', { hasText: 'AI 设置' }).click();
+      await page.waitForSelector('.modal', { timeout: 8000 });
+      const opts = await page.evaluate(() => {
+        const sel = document.querySelector('.modal select');
+        return sel ? [...sel.options].map((o) => o.textContent) : [];
+      });
+      check(P, '设置有「外观」三档可选', opts.slice(0, 3).join('/') === '跟随系统/亮色/暗色', opts.join('/'));
+      await page.locator('.modal select').first().selectOption('light');
+      await page.waitForTimeout(350);
+      const light = await page.evaluate(() => ({
+        attr: document.documentElement.getAttribute('data-theme'),
+        bg: getComputedStyle(document.body).backgroundColor,
+        stored: localStorage.getItem('vb-theme'),
+      }));
+      check(P, '系统是暗色时也能切到亮色并记住',
+        light.attr === 'light' && light.bg === 'rgb(244, 246, 248)' && light.stored === 'light', JSON.stringify(light));
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.status-chip');
+      const kept = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+      check(P, '刷新后仍是用户选的那一种（不被系统覆盖）', kept === 'light', String(kept));
+    }
     await ctx.close();
   }
 

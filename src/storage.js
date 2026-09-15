@@ -24,6 +24,8 @@ export const KILLED_KEY = 'vb-killed';
 export const REVIVED_KEY = 'vb-revived';
 /** 拼写模式开关 */
 export const SPELL_KEY = 'vb-spell';
+/** 外观偏好：system | light | dark */
+export const THEME_KEY = 'vb-theme';
 /** 上次导出备份的时间（用来提醒"很久没备份了"） */
 export const LAST_EXPORT_KEY = 'vb-last-export';
 /** 错词本：`{ 词头: {head, brief, count, reason, at, firstAt} }` */
@@ -101,6 +103,11 @@ export const loadKilled = () => loadStampMap(KILLED_KEY);
 export const saveKilled = (map) => saveStampMap(KILLED_KEY, map);
 export const loadRevived = () => loadStampMap(REVIVED_KEY);
 export const saveRevived = (map) => saveStampMap(REVIVED_KEY, map);
+export const loadTheme = () => {
+  const v = safeGet(THEME_KEY, '');
+  return ['system', 'light', 'dark'].includes(v) ? v : 'system';
+};
+export const saveTheme = (t) => safeSet(THEME_KEY, ['system', 'light', 'dark'].includes(t) ? t : 'system');
 export const loadLastExportAt = () => Number(safeGet(LAST_EXPORT_KEY, '0')) || 0;
 export const saveLastExportAt = (ts) => safeSet(LAST_EXPORT_KEY, String(Number(ts) || Date.now()));
 export const loadSpell = () => safeGet(SPELL_KEY, '') === '1';
