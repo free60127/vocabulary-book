@@ -1,0 +1,35 @@
+# Render 一键部署配置（Render Blueprint）
+# 用法：https://render.com → New → Blueprint → 选择本仓库
+# 部署完成后得到 https://xxxx.onrender.com，把该链接发给别人即可打开同一个页面。
+services:
+  - type: web
+    name: vocabulary-book
+    runtime: node
+    plan: free
+    # --include=dev：vite 属于构建期依赖（devDependencies），
+    # 而 Render 默认会注入 NODE_ENV=production，显式声明可避免装依赖时跳过 devDependencies。
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: node server/index.mjs
+    healthCheckPath: /api/health
+    envVars:
+      # 不要在此固定 PORT：Render 会自动注入 PORT，代码端用 process.env.PORT（缺省 8787）
+      - key: AI_BASE_URL
+        sync: false
+      - key: AI_MODEL
+        value: deepseek-chat
+      - key: AI_API_KEY
+        sync: false
+      # 安全相关（可选，留空即用默认值；详见 .env.example 说明）：
+      #   ALLOW_SERVER_KEY=0    强制访客自带 Key，不允许匿名借用服务端 Key（公共站点建议）
+      #   ALLOW_ORIGIN=...      跨域白名单，默认不允许任何跨域来源
+      #   RATE_LIMIT_PER_MIN=30 每个来源 IP 每分钟可提交的模型任务数
+      - key: ALLOW_SERVER_KEY
+        sync: false
+      - key: ALLOW_ORIGIN
+        sync: false
+      # 云同步（多设备同步）用的持久存储：不配的话同步数据写在容器临时磁盘上，重新部署会丢。
+      # 申请：https://console.upstash.com → Create Database → 复制 REST URL / REST Token
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

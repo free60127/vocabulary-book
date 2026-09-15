@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10222e" />
+    <meta name="description" content="单词本：查一个词就能得到完整讲解（词性/褒贬/强度/词根词缀/使用场景/助记/近义词对比/例句），存进自己的单词本，按间隔重复安排每日复习。" />
+    <!--
+      图标：全部由 public/icon.svg 生成，改图标请改那个源文件再跑 node tools/make-icons.mjs。
+      顺序有讲究 —— 支持 SVG 的浏览器优先吃第一条（矢量，任何尺寸都锐利），
+      其余按 sizes 挑最合适的一档。
+    -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- 主屏图标在 iOS 上默认带高光/圆角，这两个 meta 让它保持设计原样 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>单词本 · 查词 · 复习 · 自测</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <div style="max-width: 560px; margin: 12vh auto; padding: 0 20px; font-family: system-ui, sans-serif; line-height: 1.8; color: #1c2733">
+        <h1 style="font-size: 20px">需要启用 JavaScript</h1>
+        <p style="color: #5b6875">单词本是一个前端交互应用（查词讲解 + 间隔重复复习），请在浏览器设置里开启 JavaScript 后重新打开本页。</p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

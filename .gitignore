@@ -1,0 +1,54 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 本地密钥与环境配置（.env.example 才可提交）
+.env
+
+# 日志
+*.log
+
+# 临时文件
+tmp/
+data/
+.DS_Store
+Thumbs.db
+
+# 语料数据：教材全文受版权保护，不随仓库分发
+# 将你自己的语料放到 public/corpus/ 即可，服务端会自动加载
+public/corpus/*.json
+
+# 旧项目数据与测试中间产物
+corpus/
+test/agent_out/
+test/agent_pages/
+test/*.png
+test/lesson_*.json
+test/_*.py
+test/ocr_*.py
+test/ocr_*.json
+test/crop.py
+test/hi_render.py
+test/inspect_pdf.py
+test/agent_lesson_*.json
+test/extract_sample.*
+test/docx_dump.txt
+test/*.docx
+
+# 打包产物
+*.tgz
+
+# 与本项目无关的本地工具 / 素材（体积很大，误提交会撑爆仓库）
+# tools/models/ 是语音模型（3.4GB），remotion-demo/ 是另一个项目的素材（711MB）
+tools/models/
+tools/shotter/
+remotion-demo/
+tools/vision.mjs
+tools/asr.py
+dsh-ui-diagnostic.mjs
+dsh-*.yml
+%SystemDrive%/
+
+# Python 缓存
+__pycache__/
+*.pyc
