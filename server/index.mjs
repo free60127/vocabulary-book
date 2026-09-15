@@ -458,6 +458,13 @@ function serveStatic(res, pathname) {
   let file = path.normalize(path.join(DIST, decoded));
   if (!insideDist(file)) return json(res, 403, { error: 'forbidden' });
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    // SPA 回落只对"看起来像页面路径"的请求生效。带扩展名的路径（`/.env`、`/x.json`）
+    // 是**静态资源**请求，回落成 index.html 会给出一个 200 —— 扫描器看到 200 会以为命中，
+    // 排查问题时也容易被这个假 200 带偏。本项目没有前端路由，不会因此丢链接。
+    // ⚠️ `path.extname('/.env')` 是**空串** —— dotfile 在 Node 眼里"没有扩展名"，
+    // 只看 extname 会漏掉 `.env` 这类最该拦住的探测请求。所以基名以点开头也算资源请求。
+    const base = path.basename(decoded);
+    if (path.extname(decoded) || base.startsWith('.')) return json(res, 404, { error: 'not found' });
     file = path.join(DIST, 'index.html');
     if (!fs.existsSync(file)) return json(res, 404, { error: '前端未构建：请先 npm run build' });
   }
