@@ -596,6 +596,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         app: 'vocabulary-book',
         baseUrl: stat.baseUrl(), model: stat.model(), hasKey: stat.hasKey(),
+        // 服务端有 Key ≠ 访客能用它：ALLOW_SERVER_KEY=0 的站点里，前端据此提示"请填自己的 Key"，
+        // 否则会显示"AI 已配置"，用户一点查询却收到一句让他去改服务端 .env 的报错。
+        serverKeyAllowed: ALLOW_SERVER_KEY,
         levels: LEVEL_KEYS, defaultLevel: DEFAULT_LEVEL,
         sync: { store: syncStore.kind, durable: syncDurable, hosted: HOSTED },
         accounts: { enabled: accountsOn, durable: kvDurable },
@@ -638,7 +641,13 @@ const server = http.createServer(async (req, res) => {
       if (!term) return json(res, 400, { error: '请先输入要查的单词或短语' });
       const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
       if (ep.error) return json(res, 400, { error: ep.error });
-      if (!ep.apiKey) return json(res, 400, { error: '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key' });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
       // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
       // 只有**用服务端 Key** 的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
       if (!ep.visitorKey) {

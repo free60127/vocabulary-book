@@ -105,7 +105,10 @@ export default function App() {
   const streak = useMemo(() => summarizeStreak(days), [days])
   const due = useMemo(() => dueEntries(entries, schedule), [entries, schedule])
   const activeBook = books.find((b) => b.id === activeBookId) || null
-  const hasKey = Boolean(status?.hasKey || settings.apiKey)
+  // 「能不能查」= 自己在设置里填了 Key，或者**服务端有 Key 且允许访客借用**。
+  // 少了后半句的判断，ALLOW_SERVER_KEY=0 的站点会一直显示"AI 已配置"，
+  // 用户点查询却收到一句让他去改服务端 .env 的报错 —— 那是给站长看的，不是给他看的。
+  const hasKey = Boolean(settings.apiKey || (status?.hasKey && status?.serverKeyAllowed !== false))
   const local = useMemo(
     () => localSnapshot({ books, schedule, days, history, deletedBooks, deletedEntries }),
     [books, schedule, days, history, deletedBooks, deletedEntries],
@@ -522,7 +525,7 @@ export default function App() {
             : <button className="ghost-btn" onClick={() => setAuthOpen(true)}><LogIn size={15} />登录</button>}
           <div className="status-chip" title={status ? status.model + ' @ ' + status.baseUrl : '后端未连接'}>
             <span className={'dot ' + (status ? 'ok' : 'err')} />
-            {status ? (hasKey ? 'AI 已配置' : '未配置 API Key') : '后端未连接'}
+            {status ? (hasKey ? 'AI 已配置' : (status.hasKey ? '需要你自己的 Key' : '未配置 API Key')) : '后端未连接'}
             <span className="chip-detail">{stats.entries} 个词条 · 连续 {streak.current} 天</span>
           </div>
         </header>
