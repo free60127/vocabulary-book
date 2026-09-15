@@ -11,9 +11,9 @@ import { validateCredentials } from '../../account.js';
  */
 export default function AuthModal({
   config, account, busy, tip, onClose,
-  onSignIn, onSignUp, onSignOut, onSignOutAll, onForgot, onReset, onDeleteAccount,
+  onSignIn, onSignUp, onSignOut, onSignOutAll, onForgot, onReset, onDeleteAccount, onChangePassword,
 }) {
-  const [mode, setMode] = useState('login');       // login | register | forgot | reset
+  const [mode, setMode] = useState('login');       // login | register | forgot | reset | change
   const [form, setForm] = useState({ email: '', password: '', code: '', newPassword: '' });
   const [localErr, setLocalErr] = useState('');
   const field = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -54,8 +54,29 @@ export default function AuthModal({
             <div className="modal-actions" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
               <button className="ghost-btn" onClick={onSignOut} disabled={busy}>退出登录</button>
               <button className="ghost-btn" onClick={onSignOutAll} disabled={busy}>退出全部设备</button>
+              <button className="ghost-btn" onClick={() => { setMode(mode === 'change' ? 'login' : 'change'); setLocalErr(''); }} disabled={busy}>修改密码</button>
               <button className="ghost-btn" onClick={() => { const p = window.prompt('输入当前密码以注销账号（不可恢复）'); if (p) onDeleteAccount(p); }} disabled={busy}>注销账号</button>
             </div>
+
+            {mode === 'change' ? (
+              <div className="auth-form" style={{ marginTop: 12 }}>
+                <label className="auth-label">当前密码
+                  <input type="password" value={form.password} onChange={field('password')} autoComplete="current-password" disabled={busy} />
+                </label>
+                <label className="auth-label">新密码（至少 8 位）
+                  <input type="password" value={form.newPassword} onChange={field('newPassword')} autoComplete="new-password" disabled={busy} />
+                </label>
+                {/* 同步码是用**密码**加密后存在服务端的，服务端没有旧密码、代劳不了 ——
+                    不在本地用新密码重新加密一遍，别的设备就再也解不开了。 */}
+                <p className="muted small">改完密码，本机的同步码会用新密码重新加密一次（否则别的设备将解不开）。</p>
+                <div className="modal-actions">
+                  <button className="primary-btn" disabled={busy || !form.password || form.newPassword.length < 8}
+                    onClick={() => { setLocalErr(''); onChangePassword(form.password, form.newPassword); setForm((f) => ({ ...f, password: '', newPassword: '' })); }}>
+                    确认修改
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <>

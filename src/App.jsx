@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookMarked, ChevronRight, Cloud, Flame, FolderPlus, LoaderCircle, LogIn,
-  Search, Settings, Sparkles, Trash2, Volume2, X,
+  PanelLeftClose, PanelLeftOpen, Search, Settings, Sparkles, Trash2, Volume2, X,
 } from 'lucide-react'
 import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob } from './api.js'
 import {
@@ -10,8 +10,9 @@ import {
 } from './constants.js'
 import { submitAndPoll } from './hooks/pollJob.js'
 import {
+  SIDE_STATE_KEY,
   LEVEL_KEY, loadBooks, loadDays, loadDeletedBooks, loadDeletedEntries, loadHistory,
-  loadSchedule, loadSettings, localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory,
+  loadSchedule, loadSettings, localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory, safeGet,
   safeSet, saveBooks, saveDays, saveDeletedBooks, saveDeletedEntries, saveHistory,
   saveSchedule, saveSettings,
 } from './storage.js'
@@ -24,9 +25,9 @@ import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
 import { speak } from './speak.js'
 import { loadSyncCode, loadSyncMeta, newSyncCode, saveSyncCode, saveSyncMeta, syncOnce } from './sync.js'
 import {
-  authConfig, bindSync, deleteAccount as apiDelete, fetchMe, forgot as apiForgot,
-  loadToken, loadUser, resetPassword as apiReset, saveToken, saveUser,
-  signIn, signOut as apiSignOut, signOutAll as apiSignOutAll, signUp,
+  authConfig, bindSyncCode, changePassword as apiChangePassword, deleteAccount as apiDelete,
+  fetchMe, forgot as apiForgot, loadToken, loadUser, resetPassword as apiReset, saveToken,
+  saveUser, signIn, signOut as apiSignOut, signOutAll as apiSignOutAll, signUp,
 } from './account.js'
 import EntryCard from './components/EntryCard.jsx'
 import QuizPane from './components/QuizPane.jsx'
@@ -50,6 +51,14 @@ export default function App() {
 
   /* ---------- 界面状态 ---------- */
   const [view, setView] = useState('search')          // search | review | book | quiz
+  /* 侧栏开合。
+   * ⚠️ 手机端必须**默认收起**：≤900px 时侧栏是 position:fixed 的整屏抽屉，
+   * 默认展开就会把主界面整个盖住（实测在 390px 宽的手机上页面完全没法用）。
+   * 桌面端则记住上次的选择。 */
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 900) return false
+    return safeGet(SIDE_STATE_KEY, '') !== 'collapsed'
+  })
   const [query, setQuery] = useState('')
   const [entry, setEntry] = useState(null)
   const [activeBookId, setActiveBookId] = useState('')
@@ -60,6 +69,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
+  /* 账号里是否存过同步码（启动时只拿得到这个事实 —— 解它需要密码，见 afterAuth） */
+  const [accountHasSync, setAccountHasSync] = useState(false)
   const [quizSetupOpen, setQuizSetupOpen] = useState(false)
   const [quizCount, setQuizCount] = useState(10)
   const [quizScope, setQuizScope] = useState('all')
@@ -95,6 +106,17 @@ export default function App() {
   useEffect(() => { getStatus().then(setStatus).catch(() => setStatus(null)) }, [])
   useEffect(() => { safeSet(LEVEL_KEY, level) }, [level])
   useEffect(() => { authConfig().then(setAuthCfg).catch(() => setAuthCfg({ enabled: false })) }, [])
+
+  const toggleSidebar = useCallback(() => {
+    const next = !sidebarOpen
+    safeSet(SIDE_STATE_KEY, next ? 'open' : 'collapsed')
+    setSidebarOpen(next)
+  }, [sidebarOpen])
+  /* 手机端选完东西要把抽屉收起来 —— 不然点开一个单词本，抽屉还压在上面，
+     用户看到的还是侧栏，会以为"点了没反应"。（桌面端不动：侧栏本来就常驻。） */
+  const closeSidebarOnMobile = useCallback(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 900) setSidebarOpen(false)
+  }, [])
 
   /* ---------- 派生 ---------- */
   const persistBooks = useCallback((next) => { setBooks(next); saveBooks(next) }, [])
@@ -370,27 +392,50 @@ export default function App() {
     saveSyncCode(''); setSyncCode(''); setSyncTip('已停用云同步（本机数据保留）')
   }
 
-  /* ---------- 账号 ---------- */
-  const afterAuth = useCallback((r) => {
+  /* ---------- 账号 ----------
+   * ⚠️ 这条链路里同步码**只有明文形态在浏览器内流转**：
+   * 发给服务端的永远是密文（用账号密码派生密钥加密），从服务端拿回来的要先用密码解开。
+   * 移植时漏掉这一步会出两种真故障 —— 绑定必然 400，或者把密文当同步码用（换设备拉不到数据，
+   * 还会把本机原来那串好码覆盖掉）。所以 afterAuth 一定要拿的 `password` 就是这个用途。 */
+  const afterAuth = useCallback(async (r, password) => {
     if (!r.ok) { setAuthTip(r.error || '操作失败'); return }
     const token = r.token || (account && account.token) || ''
     const email = r.email || (r.user && r.user.email) || (account && account.email) || ''
-    const next = { token, email }
-    setAccount(next); saveToken(token); saveUser({ email })
+    setAccount({ token, email }); saveToken(token); saveUser({ email })
     setAuthOpen(false); setAuthTip('')
+
+    if (r.syncError) {
+      setAuthTip(r.syncError)
+      flash('已登录：' + email + '（同步码需重新设置）', TIP_LONG_MS)
+      return
+    }
+    // 解开账号里存的同步码 → 这台设备就接上了（换设备不用手抄）
+    if (r.syncCode) {
+      saveSyncCode(r.syncCode); setSyncCode(r.syncCode)
+      setSyncTip('已从账号取回同步码')
+      runSync(true, r.syncCode)
+      flash('已登录：' + email)
+      return
+    }
+    // 账号里没存过同步码（首次登录 / 老账号）：**立刻把本机这串绑上去**。
+    // 不绑的话这台设备会一直用自己的码，和别的设备永远碰不上面。
+    if (syncCode && password) {
+      const b = await bindSyncCode(token, syncCode, password)
+      setSyncTip(b.ok ? '已把本机同步码存进账号 —— 换设备登录后会自动带回来' : ('同步码保存失败：' + (b.error || '')))
+    }
     flash('已登录：' + email)
-    // 账号里存了同步码就自动接上（换设备时不用手抄）
-    if (r.sync) { saveSyncCode(r.sync); setSyncCode(r.sync); runSync(true, r.sync) }
-  }, [account, flash, runSync])
+  }, [account, flash, runSync, syncCode])
 
   const doSignIn = async (email, password) => {
     setAuthBusy(true); setAuthTip('')
-    afterAuth(await signIn(email, password, loadSyncMeta().device || ''))
+    // 已登录后 if/else 分支里要 await，所以这里不 setAuthBusy(false) 收尾会有竞态；
+    // 交给 afterAuth 结束后统一收（它在 finally 里没机会，所以显式 await 完再收）。
+    await afterAuth(await signIn({ email, password, device: loadSyncMeta().device || '' }), password)
     setAuthBusy(false)
   }
   const doSignUp = async (email, password) => {
     setAuthBusy(true); setAuthTip('')
-    afterAuth(await signUp(email, password))
+    await afterAuth(await signUp({ email, password, syncCode }), password)
     setAuthBusy(false)
   }
   const doSignOut = async () => {
@@ -421,12 +466,25 @@ export default function App() {
     if (r.ok) { setAccount({ token: '', email: '' }); saveToken(''); saveUser({}); flash('账号已注销') } else setAuthTip(r.error || '注销失败')
     setAuthBusy(false)
   }
-  const doBindSync = async () => {
+  /* 把本机同步码存进账号。**必须带账号密码** —— 服务端只存密文，加密要在本地做 */
+  const doBindSync = async (password) => {
     if (!syncCode) return
+    if (!password) { setSyncTip('请先填写账号密码（同步码要用它加密后才发出去）'); return }
     setSyncBusy(true)
-    const r = await bindSync(account.token, syncCode)
-    setSyncTip(r.ok ? '同步码已存到账号 —— 换设备登录后会自动带回来' : ('保存失败：' + (r.error || '')))
+    const r = await bindSyncCode(account.token, syncCode, password)
+    setSyncTip(r.ok ? '同步码已加密存进账号 —— 换设备登录后会自动带回来' : ('保存失败：' + (r.error || '')))
     setSyncBusy(false)
+  }
+  /* 改密码：**同时用新密码重新加密同步码**，否则别的设备再也解不开 */
+  const doChangePassword = async (oldPassword, newPassword) => {
+    setAuthBusy(true)
+    const r = await apiChangePassword({ token: account.token, oldPassword, newPassword, syncCode })
+    if (r.ok) {
+      if (r.token) { saveToken(r.token); setAccount({ token: r.token, email: account.email }) }
+      setAuthTip('')
+      flash('密码已修改' + (syncCode ? '（同步码已用新密码重新加密）' : ''))
+    } else setAuthTip(r.error || '修改失败')
+    setAuthBusy(false)
   }
 
   /* 已登录时拉一次用户信息（顺便验证令牌还有效） */
@@ -438,7 +496,9 @@ export default function App() {
       if (r.ok) {
         const email = r.email || (r.user && r.user.email) || ''
         setAccount({ token, email }); saveUser({ email })
-        if (r.sync && !loadSyncCode()) { saveSyncCode(r.sync); setSyncCode(r.sync) }
+        // 这里**不能**把 r.sync 当同步码用：那是密文，解它需要账号密码（启动时没有）。
+        // 只记下"账号里有码"这个事实，界面上提示用户登录一次即可自动取回。
+        setAccountHasSync(Boolean(r.hasSync))
       } else {
         // 令牌失效（改过密码 / 被踢）：清掉，免得后续请求一直 401
         saveToken(''); saveUser({}); setAccount({ token: '', email: '' })
@@ -462,9 +522,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {/* 手机端点侧栏外面任意处即可收起（桌面端这条规则 display:none，不生效） */}
+      {sidebarOpen ? <div className="sidebar-backdrop" onClick={toggleSidebar} aria-hidden="true" /> : null}
+      <aside className={'sidebar' + (sidebarOpen ? '' : ' collapsed')}>
+        <button className="sidebar-close" onClick={toggleSidebar} aria-label="收起侧栏"><X size={18} /></button>
         <div className="brand"><div className="brand-mark">词</div><div><strong>单词本</strong><span>VOCABULARY BOOK</span></div></div>
-        <button className="primary-btn" onClick={createAndSave}><FolderPlus size={16} />新建单词本</button>
+        <button className="primary-btn" onClick={() => { closeSidebarOnMobile(); createAndSave() }}><FolderPlus size={16} />新建单词本</button>
 
         <div className="side-section">
           <div className="side-title">我的单词本（{stats.books}）</div>
@@ -480,6 +543,7 @@ export default function App() {
                   const isCurrent = b.id === activeBookId && view === 'book'
                   setActiveBookId(isCurrent ? '' : b.id)
                   setView(isCurrent ? 'search' : 'book')
+                  closeSidebarOnMobile()
                 }}>
                   <span className="lesson-title">{b.name}</span>
                   <span className="lib-count">{b.entries.length}</span>
@@ -494,7 +558,7 @@ export default function App() {
               <div className="side-title">最近查过</div>
               <div className="lesson-list" style={{ maxHeight: 150 }}>
                 {history.slice(0, 20).map((h) => (
-                  <button key={h.id} className="lesson-item" onClick={() => openHistory(h)}
+                  <button key={h.id} className="lesson-item" onClick={() => { closeSidebarOnMobile(); openHistory(h) }}
                     title={h.entry ? '点一下回到上次查到的讲解' : '点一下重新查这个词'}>
                     <span className="lesson-title">{h.head}</span>
                     {h.entry ? null : <span className="muted small">需重查</span>}
@@ -506,13 +570,17 @@ export default function App() {
         </div>
 
         <div className="side-footer">
-          <button className="ghost-btn" onClick={() => setSettingsOpen(true)}><Settings size={15} />AI 设置</button>
-          <button className="ghost-btn" onClick={() => setBackupOpen(true)}><Cloud size={15} />备份/同步</button>
+          <button className="ghost-btn" onClick={() => { closeSidebarOnMobile(); setSettingsOpen(true) }}><Settings size={15} />AI 设置</button>
+          <button className="ghost-btn" onClick={() => { closeSidebarOnMobile(); setBackupOpen(true) }}><Cloud size={15} />备份/同步</button>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
+          <button className="icon-btn side-toggle" onClick={toggleSidebar}
+            title={sidebarOpen ? '收起侧栏' : '展开侧栏'} aria-label={sidebarOpen ? '收起侧栏' : '展开侧栏'}>
+            {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+          </button>
           <div className="topbar-left"><BookMarked size={16} /><strong>单词本</strong></div>
           <button className={'ghost-btn due-btn' + (due.length ? ' has-due' : '')} onClick={startReview}>
             <Flame size={15} />今日待复习{due.length ? ` (${due.length})` : ''}
@@ -638,14 +706,16 @@ export default function App() {
           syncCode={syncCode} syncTip={syncTip} syncBusy={syncBusy} syncMeta={syncMeta}
           onNewCode={startNewSync} onUseCode={useExistingCode} onCopyCode={copySyncCode}
           onStopSync={stopSync} onSyncNow={() => runSync(true)}
-          account={account} onOpenAuth={() => setAuthOpen(true)} onBindSync={doBindSync} />
+          account={account} accountHasSync={accountHasSync}
+          onOpenAuth={() => setAuthOpen(true)} onBindSync={doBindSync} />
       ) : null}
 
       {authOpen ? (
         <AuthModal config={authCfg} account={account} busy={authBusy} tip={authTip}
           onClose={() => setAuthOpen(false)}
           onSignIn={doSignIn} onSignUp={doSignUp} onSignOut={doSignOut} onSignOutAll={doSignOutAll}
-          onForgot={doForgot} onReset={doReset} onDeleteAccount={doDeleteAccount} />
+          onForgot={doForgot} onReset={doReset} onDeleteAccount={doDeleteAccount}
+          onChangePassword={doChangePassword} />
       ) : null}
 
       {quizSetupOpen ? (

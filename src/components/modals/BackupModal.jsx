@@ -12,9 +12,11 @@ import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
 export default function BackupModal({
   onClose, summary, onExport, onImport,
   syncCode, syncTip, syncBusy, onNewCode, onUseCode, onCopyCode, onStopSync, onSyncNow,
-  syncMeta, account, onOpenAuth, onBindSync,
+  syncMeta, account, accountHasSync, onOpenAuth, onBindSync,
 }) {
   const [codeInput, setCodeInput] = useState('');
+  const [binding, setBinding] = useState(false);   // 是否展开"输入密码以绑定同步码"
+  const [bindPw, setBindPw] = useState('');
   const [importErr, setImportErr] = useState('');
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -75,11 +77,28 @@ export default function BackupModal({
             {account && account.email ? (
               <>
                 <span className="muted small">已登录：{account.email}</span>
-                <button className="ghost-btn sm" onClick={onBindSync} disabled={!syncCode || syncBusy}>把同步码存到账号</button>
+                {binding ? (
+                  <>
+                    {/* 同步码要在**本地**用账号密码加密后才发出去（服务端只存密文，它自己也解不开），
+                        所以这一步必须问用户要密码 —— 不是多余的一步。 */}
+                    <input className="fav-search" type="password" autoComplete="current-password"
+                      placeholder="账号密码（用来加密同步码）" value={bindPw}
+                      onChange={(e) => setBindPw(e.target.value)} disabled={syncBusy} />
+                    <button className="primary-btn sm" disabled={syncBusy || !bindPw}
+                      onClick={() => { onBindSync(bindPw); setBindPw(''); setBinding(false); }}>确认存入</button>
+                    <button className="ghost-btn sm" onClick={() => { setBinding(false); setBindPw(''); }}>取消</button>
+                  </>
+                ) : (
+                  <button className="ghost-btn sm" onClick={() => setBinding(true)} disabled={!syncCode || syncBusy}>把同步码存到账号</button>
+                )}
               </>
             ) : (
               <>
-                <span className="muted small">登录后同步码会跟着账号走，换设备不用手抄。</span>
+                <span className="muted small">
+                  {accountHasSync
+                    ? '账号里已存过同步码：登录一次即可自动取回（不用手抄）。'
+                    : '登录后同步码会跟着账号走，换设备不用手抄。'}
+                </span>
                 <button className="ghost-btn sm" onClick={onOpenAuth}><LogIn size={14} />登录 / 注册</button>
               </>
             )}

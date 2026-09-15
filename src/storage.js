@@ -15,6 +15,8 @@ export const HISTORY_KEY = 'vb-history';
 export const DELETED_BOOKS_KEY = 'vb-deleted-books';
 export const DELETED_ENTRIES_KEY = 'vb-deleted-entries';
 export const SETTINGS_KEY = 'vb-settings';
+/** 侧栏开合（只在桌面端记住；手机端每次进来都收起，见 App.jsx 的说明） */
+export const SIDE_STATE_KEY = 'vb-sidebar';
 export const LEVEL_KEY = 'vb-level';
 
 export function safeGet(key, fallback = '') {

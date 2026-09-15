@@ -299,6 +299,63 @@ try {
   ok('账号弹窗可打开', auth.title === '账号', auth.title || '');
   ok('未启用账号时给出解释而不是死按钮', auth.disabled === true && /没有启用账号功能/.test(auth.note), `disabled=${auth.disabled} ${auth.note}`);
 
+  /* ---------- ⑥ 手机端：侧栏抽屉必须能开、能关 ----------
+   * 用户报的原话："手机端打开这个左边的栏没法收缩关掉"。
+   * 根因是 CSS 里 .sidebar-close / .sidebar-backdrop / .side-toggle 三个类的样式都在，
+   * 但 JSX 一个都没渲染 —— ≤900px 时侧栏是 position:fixed 的整屏抽屉且默认展开，
+   * 直接把主界面盖死。所以这里逐条钉：默认收起、能开、X 能关、点遮罩能关、选完自动关。 */
+  {
+    const mctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    // 塞一个本子和一个词条，才能验证"点完自动收起"
+    await mctx.addInitScript(() => {
+      localStorage.setItem('vb-books', JSON.stringify([{
+        id: 'b-m', name: '手机测试本', note: '', createdAt: 1,
+        entries: [{ id: 'wb-m', head: 'object', brief: '物体', kind: 'word', meanings: [{ pos: '名词', cn: '物体' }], createdAt: 1 }],
+      }]));
+    });
+    const mp = await mctx.newPage();
+    const mErrors = [];
+    mp.on('pageerror', (e) => mErrors.push(String(e.message)));
+    await mp.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await mp.waitForSelector('.side-toggle', { timeout: 30000 });
+
+    ok('手机端默认收起侧栏（不再一进来就盖住主界面）',
+      await mp.locator('.sidebar.collapsed').count() === 1, '');
+    ok('收起时侧栏不可见', !(await mp.locator('.sidebar').isVisible()));
+    ok('顶部有展开按钮（不然收起后就再也打不开了）', await mp.locator('.side-toggle').isVisible());
+
+    await mp.locator('.side-toggle').tap();
+    await mp.waitForTimeout(350);
+    ok('点顶栏按钮能展开', await mp.locator('.sidebar').isVisible());
+    ok('展开时出现遮罩', await mp.locator('.sidebar-backdrop').isVisible());
+    ok('侧栏里有「收起」按钮', await mp.locator('.sidebar-close').isVisible());
+
+    await mp.locator('.sidebar-close').tap();
+    await mp.waitForTimeout(350);
+    ok('点 X 能收起', await mp.locator('.sidebar.collapsed').count() === 1);
+
+    await mp.locator('.side-toggle').tap();
+    await mp.waitForTimeout(350);
+    await mp.locator('.sidebar-backdrop').tap({ position: { x: 370, y: 400 } });
+    await mp.waitForTimeout(350);
+    ok('点侧栏外面的遮罩也能收起', await mp.locator('.sidebar.collapsed').count() === 1);
+
+    await mp.locator('.side-toggle').tap();
+    await mp.waitForTimeout(350);
+    await mp.locator('.lesson-item').first().tap();
+    await mp.waitForTimeout(400);
+    const afterPick = await mp.evaluate(() => ({
+      collapsed: Boolean(document.querySelector('.sidebar.collapsed')),
+      hasRows: Boolean(document.querySelector('.entry-row')),
+    }));
+    ok('手机端选中单词本后抽屉自动收起，并展示本子内容', afterPick.collapsed && afterPick.hasRows, JSON.stringify(afterPick));
+
+    const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    ok('手机端没有横向溢出', overflow <= 1, `溢出 ${overflow}px`);
+    ok('手机端无 JS 报错', mErrors.length === 0, mErrors.slice(0, 2).join(' | '));
+    await mctx.close();
+  }
+
   ok('全程无控制台报错', errors.length === 0, errors.slice(0, 2).join(' | '));
 } catch (e) {
   ok('e2e 执行未抛错', false, String(e.message || e).slice(0, 160));
