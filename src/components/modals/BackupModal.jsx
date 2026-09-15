@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
 import { mergeSnapshot } from '../../storage.js';
+import { useEscape } from '../../hooks/useEscape.js';
 
 /**
  * 备份与恢复：本机导出/导入 + 云同步（同步码）。
@@ -21,6 +22,7 @@ export default function BackupModal({
   const [pulling, setPulling] = useState(false);   // 是否展开"从账号取回同步码"
   const [pullPw, setPullPw] = useState('');
   const [importErr, setImportErr] = useState('');
+  useEscape(onClose);
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal backup-modal" role="dialog" aria-modal="true" aria-label="备份与恢复" onClick={(e) => e.stopPropagation()}>

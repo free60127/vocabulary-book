@@ -22,7 +22,8 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
-      globals: { ...globals.browser, ...globals.node },
+      // __BUILD_ID__ 由 vite.config.js 的 define 注入（构建标识，显示在设置与更多菜单里）
+      globals: { ...globals.browser, ...globals.node, __BUILD_ID__: 'readonly' },
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     plugins: { 'react-hooks': reactHooks, react },

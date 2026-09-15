@@ -7,7 +7,7 @@
  */
 import { mergeBooks, sanitizeBook, sanitizeEntry } from './wordbook.js';
 import { mergeFavorites } from './favorites.js';
-import { mergeDays, mergeSchedules } from './review.js';
+import { mergeDays, mergeSchedules, mergeWrong } from './review.js';
 
 export const BOOKS_KEY = 'vb-books';
 export const SCHEDULE_KEY = 'vb-schedule';
@@ -19,6 +19,17 @@ export const SETTINGS_KEY = 'vb-settings';
 /** 收藏夹（近义词行上点 ⭐ 攒下来的"待细看"的词） */
 export const FAVORITES_KEY = 'vb-favorites';
 export const DELETED_FAVORITES_KEY = 'vb-deleted-favorites';
+/** 已斩掉的词：`{ 词头: 时间戳 }`；配套一份"复活"记录，合并时比时间戳（见 review.js 的 killedSet） */
+export const KILLED_KEY = 'vb-killed';
+export const REVIVED_KEY = 'vb-revived';
+/** 拼写模式开关 */
+export const SPELL_KEY = 'vb-spell';
+/** 上次导出备份的时间（用来提醒"很久没备份了"） */
+export const LAST_EXPORT_KEY = 'vb-last-export';
+/** 错词本：`{ 词头: {head, brief, count, reason, at, firstAt} }` */
+export const WRONG_KEY = 'vb-wrong';
+/** 卡片追问的问答（本机留档，不进云同步：它是"聊过什么"，不是学习数据） */
+export const FOLLOWUPS_KEY = 'vb-followups';
 /** 侧栏开合（只在桌面端记住；手机端每次进来都收起，见 App.jsx 的说明） */
 export const SIDE_STATE_KEY = 'vb-sidebar';
 export const LEVEL_KEY = 'vb-level';
@@ -69,6 +80,82 @@ export const saveDays = (days) => safeSet(DAYS_KEY, JSON.stringify((Array.isArra
 export const loadFavorites = () => parseArray(safeGet(FAVORITES_KEY, '[]')).filter((f) => f && typeof f === 'object');
 export const saveFavorites = (list) => safeSet(FAVORITES_KEY, JSON.stringify((Array.isArray(list) ? list : []).slice(0, 500)));
 export const loadDeletedFavorites = () => parseArray(safeGet(DELETED_FAVORITES_KEY, '[]')).filter((x) => typeof x === 'string' && x);
+/** 已斩掉 / 已复活：都是 `{词头: 时间戳}`，只保留数字，脏数据直接丢 */
+const loadStampMap = (key) => {
+  const raw = parseObject(safeGet(key, '{}'));
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const t = Number(v);
+    if (k && Number.isFinite(t) && t > 0) out[String(k).slice(0, 200)] = t;
+  }
+  return out;
+};
+const saveStampMap = (key, map) => {
+  const entries = Object.entries(map && typeof map === 'object' ? map : {})
+    .filter(([k, v]) => k && Number.isFinite(Number(v)))
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 3000);
+  safeSet(key, JSON.stringify(Object.fromEntries(entries)));
+};
+export const loadKilled = () => loadStampMap(KILLED_KEY);
+export const saveKilled = (map) => saveStampMap(KILLED_KEY, map);
+export const loadRevived = () => loadStampMap(REVIVED_KEY);
+export const saveRevived = (map) => saveStampMap(REVIVED_KEY, map);
+export const loadLastExportAt = () => Number(safeGet(LAST_EXPORT_KEY, '0')) || 0;
+export const saveLastExportAt = (ts) => safeSet(LAST_EXPORT_KEY, String(Number(ts) || Date.now()));
+export const loadSpell = () => safeGet(SPELL_KEY, '') === '1';
+export const saveSpell = (on) => safeSet(SPELL_KEY, on ? '1' : '0');
+
+/* ---------- 错词本 ---------- */
+export const loadWrong = () => {
+  const raw = parseObject(safeGet(WRONG_KEY, '{}'));
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!k || !v || typeof v !== 'object') continue;
+    out[String(k).slice(0, 200)] = {
+      head: String(v.head || k).slice(0, 200),
+      brief: String(v.brief || '').slice(0, 600),
+      phonetic: String(v.phonetic || '').slice(0, 120),
+      count: Math.min(999, Math.max(1, Number(v.count) || 1)),
+      reason: ['forgot', 'spell', 'reveal'].includes(v.reason) ? v.reason : 'forgot',
+      at: Number(v.at) || 0,
+      firstAt: Number(v.firstAt) || Number(v.at) || 0,
+    };
+  }
+  return out;
+};
+export const saveWrong = (map) => {
+  const entries = Object.entries(map && typeof map === 'object' ? map : {})
+    .sort((a, b) => (Number(b[1] && b[1].at) || 0) - (Number(a[1] && a[1].at) || 0))
+    .slice(0, 2000);
+  safeSet(WRONG_KEY, JSON.stringify(Object.fromEntries(entries)));
+};
+
+/* ---------- 卡片追问的问答留档 ---------- */
+/** 结构：`{ [entryId]: [{ q, a, at }] }`；每个词条最多 20 条、总共最多 200 个词条 */
+export const loadFollowups = () => {
+  const raw = parseObject(safeGet(FOLLOWUPS_KEY, '{}'));
+  const out = {};
+  for (const [id, list] of Object.entries(raw)) {
+    if (!id || !Array.isArray(list)) continue;
+    const clean = list
+      .filter((x) => x && typeof x === 'object' && (x.q || x.a))
+      .slice(-20)
+      .map((x) => ({ q: String(x.q || '').slice(0, 500), a: String(x.a || '').slice(0, 4000), at: Number(x.at) || 0 }));
+    if (clean.length) out[id] = clean;
+  }
+  return out;
+};
+export const saveFollowups = (map) => {
+  const entries = Object.entries(map && typeof map === 'object' ? map : {})
+    .filter(([id, list]) => id && Array.isArray(list) && list.length)
+    .sort((a, b) => {
+      const at = (l) => (l[1].length ? Number(l[1][l[1].length - 1].at) || 0 : 0);
+      return at(b) - at(a);
+    })
+    .slice(0, 200);
+  safeSet(FOLLOWUPS_KEY, JSON.stringify(Object.fromEntries(entries)));
+};
 export const saveDeletedFavorites = (list) => safeSet(DELETED_FAVORITES_KEY, JSON.stringify((Array.isArray(list) ? list : []).slice(-2000)));
 
 export const loadHistory = () => parseArray(safeGet(HISTORY_KEY, '[]'))
@@ -157,7 +244,7 @@ export const loadSettings = () => parseObject(safeGet(SETTINGS_KEY, '{}'));
 export const saveSettings = (s) => safeSet(SETTINGS_KEY, JSON.stringify(s || {}));
 
 /* ---------- 快照：云同步与备份共用 ---------- */
-export function localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites }) {
+export function localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong }) {
   return {
     books: Array.isArray(books) ? books : [],
     review: schedule && typeof schedule === 'object' ? schedule : {},
@@ -167,7 +254,26 @@ export function localSnapshot({ books, schedule, days, history, favorites, delet
     deletedBooks: Array.isArray(deletedBooks) ? deletedBooks : [],
     deletedEntries: Array.isArray(deletedEntries) ? deletedEntries : [],
     deletedFavorites: Array.isArray(deletedFavorites) ? deletedFavorites : [],
+    killed: killed && typeof killed === 'object' ? killed : {},
+    revived: revived && typeof revived === 'object' ? revived : {},
+    wrong: wrong && typeof wrong === 'object' ? wrong : {},
   };
+}
+
+/**
+ * 时间戳表的合并：每个键取**更晚**的那次操作。
+ * 斩掉与复活是两个独立的表，所以"先斩后恢复"和"先恢复后斩"都能得到正确结果 ——
+ * 并集式的墓碑做不到这一点（恢复永远赢不了，用户会看到斩掉的词自己回来）。
+ */
+export function mergeStamps(a, b, limit = 3000) {
+  const out = { ...(a && typeof a === 'object' ? a : {}) };
+  for (const [k, v] of Object.entries(b && typeof b === 'object' ? b : {})) {
+    if (!k) continue;
+    const t = Number(v) || 0;
+    if (t > (Number(out[k]) || 0)) out[k] = t;
+  }
+  const entries = Object.entries(out).sort((x, y) => Number(y[1]) - Number(x[1])).slice(0, limit);
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -221,6 +327,10 @@ export function mergeSnapshot(local, remote) {
     deletedBooks,
     deletedEntries,
     deletedFavorites,
+    killed: mergeStamps(local.killed, remote && remote.killed),
+    revived: mergeStamps(local.revived, remote && remote.revived),
+    // 错词本按词头合并：取"次数更多 + 更近"的那份（同一份错不该被数两遍）
+    wrong: mergeWrong(local.wrong, remote && remote.wrong),
     added: { booksAdded, entriesAdded, favoritesAdded: favorites.length },
   };
 }

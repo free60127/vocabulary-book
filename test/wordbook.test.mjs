@@ -8,7 +8,7 @@
  * 跑法：node test/wordbook.test.mjs
  */
 import {
-  allEntries, createBook, entryLabel, entryTombstoneKey, findEntryBook, mergeBooks,
+  allEntries, createBook, entryLabel, entryTombstoneKey, findBookByHead, findEntryBook, mergeBooks,
   newBookId, newEntryId, removeBook, removeEntry, renameBook, sanitizeBook, sanitizeDictBlock,
   sanitizeEntry, summarizeBooks, upsertEntry,
 } from '../src/wordbook.js';
@@ -67,6 +67,29 @@ const ids = (list) => allEntries(list).map((e) => e.id);
   list = removeBook(list, bid);
   check('删本子', list.length === 0);
   check('newBookId 前缀正确', newBookId().startsWith('bk-') && newEntryId().startsWith('wb-'));
+}
+
+/* ---------- 1b. 同一个词查两次：不能变成两条 ----------
+   服务端每次查词都发一个新 id（一个任务一个 id），所以"查完存、过一会儿又查又存"
+   是本子里出现重复词条最常见的路径：两条一模一样的 object，复习排期还裂成两份。
+   实测（用户模拟）复现过，这里钉住。 */
+{
+  let list = createBook([], '我的单词本');
+  const bid = list[0].id;
+  list = upsertEntry(list, bid, E('wb-aaa', 'object', { brief: '第一次查的释义' })).list;
+  const r = upsertEntry(list, bid, E('wb-bbb', 'object', { brief: '第二次查的释义' }));
+  list = r.list;
+  check('同词头、不同 id 再存 → 覆盖而不是新增', allEntries(list).length === 1, JSON.stringify(allEntries(list).map((e) => e.id)));
+  check('覆盖算 replaced（调用方据此不重建排期）', r.replaced === true);
+  check('保留原 id（排期是按 id 存的，换 id 等于丢掉复习进度）', allEntries(list)[0].id === 'wb-aaa');
+  check('内容换成新的那一份', allEntries(list)[0].brief === '第二次查的释义');
+  check('大小写/空格算同一个词', upsertEntry(list, bid, E('wb-ccc', '  Object ')).list[0].entries.length === 1);
+  check('findBookByHead 能找到（卡片据此显示「已在 X 里」）', findBookByHead(list, 'OBJECT')?.id === bid);
+  check('没查过的词 findBookByHead 返回 null', findBookByHead(list, 'banana') === null);
+  check('词头为空时不误判', findBookByHead(list, '') === null);
+  // 不同的词当然还是各存一条
+  const two = upsertEntry(list, bid, E('wb-ddd', 'oppose')).list;
+  check('不同的词仍然各存一条', two[0].entries.length === 2);
 }
 
 /* ---------- 3. 合并（跨设备同步的核心） ---------- */

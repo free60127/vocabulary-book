@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useEscape } from '../../hooks/useEscape.js';
 import { X } from 'lucide-react';
 import { validateCredentials } from '../../account.js';
 
@@ -16,6 +17,7 @@ export default function AuthModal({
   const [mode, setMode] = useState('login');       // login | register | forgot | reset | change
   const [form, setForm] = useState({ email: '', password: '', code: '', newPassword: '' });
   const [localErr, setLocalErr] = useState('');
+  useEscape(onClose);
   const field = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = () => {

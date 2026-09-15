@@ -44,11 +44,11 @@ export const getLookupJob = (jobId) => api('/api/lookup/' + jobId, {}, TIMEOUT.f
 export const quiz = (payload) => api('/api/quiz', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
 export const getQuizJob = (jobId) => api('/api/quiz/' + jobId, {}, TIMEOUT.fast);
 
-/* ---------- 音标兜底 ---------- */
-export const getPhonetic = (word) => api('/api/phonetic?word=' + encodeURIComponent(word), {}, TIMEOUT.fast);
+/* ---------- 词条追问（看完卡片之后的"再问一句"） ---------- */
+export const followup = (payload) => api('/api/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
+export const getFollowupJob = (jobId) => api('/api/followup/' + jobId, {}, TIMEOUT.fast);
 
 /* ---------- 云同步 ---------- */
-export const getSyncInfo = () => api('/api/sync/info', {}, TIMEOUT.fast);
 export const createSyncCode = () => api('/api/sync/new', { method: 'POST' }, TIMEOUT.normal);
 export const pullCloudSync = (code) => api('/api/sync/' + code, {}, TIMEOUT.normal);
 
@@ -80,12 +80,3 @@ export const authPost = (action, payload = {}, token = '') => api('/api/auth/' +
   headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
   body: JSON.stringify(payload),
 });
-
-/* ---------- 错误上报（失败不影响用户） ---------- */
-export const reportClientError = (payload) => {
-  try {
-    return fetch(BASE + '/api/report', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), keepalive: true,
-    }).catch(() => {});
-  } catch { return Promise.resolve(); }
-};

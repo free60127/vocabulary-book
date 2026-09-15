@@ -1,0 +1,260 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { BookX, Check, Eye, Lightbulb, Skull, Sparkles, Volume2 } from 'lucide-react';
+import { GRADES, GRADE_KEYS, checkSpelling, gradeHint, scheduleOf, spellHint } from '../review.js';
+import { speak } from '../speak.js';
+
+/** 键盘：1/2/3 = 忘了/一般/简单；空格或回车 = 翻面；Esc = 退出复习 */
+const KEY_TO_GRADE = { 1: 'forgot', 2: 'normal', 3: 'easy' };
+const HINT_MAX = 3;
+
+/** 复习卡片上的内容：词条（本子里的）与收藏项字段不同，统一在这里取 */
+function cardOf(item) {
+  const e = item.entry || {};
+  const f = item.favorite || {};
+  return {
+    head: item.head || e.head || f.head || '',
+    phonetic: item.phonetic || e.phonetic || f.phonetic || '',
+    pos: e.pos || f.pos || '',
+    register: e.register || f.register || '',
+    tone: e.tone || f.tone || '',
+    strength: e.strength || f.strength || '',
+    meaning: (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || item.brief || '',
+    brief: e.brief || '',
+    diff: (e.synonyms && e.synonyms[0] && e.synonyms[0].diff) || '',
+    synWord: (e.synonyms && e.synonyms[0] && e.synonyms[0].word) || '',
+    example: (e.examples && e.examples[0]) || null,
+    fromFavorite: Boolean(item.favorite),
+  };
+}
+
+/**
+ * 复习面板（每日主循环）。
+ *
+ * 三块能力：
+ *  ① **普通模式**：先回想 → 翻面 → 三档评分（键盘 1/2/3、手机左右滑动、点词头翻面）；
+ *  ② **拼写模式**（可开关，选择记在本机）：给中文与音标，把单词**拼对**才放行；
+ *     提示分三级（首字母 → 一半 → 整个答案），点到第 3 次就把答案摆出来并要求重打一遍 ——
+ *     照着答案抄一遍也比直接跳过强（这一条是用户明确要的）。
+ *  ③ **斩掉**：这个词我认识，以后别再进复习清单（可在「已斩掉的词」里恢复）。
+ */
+export default function ReviewPane({
+  queue, index, revealed, schedule, spell, practice, killedCount, wrongCount, mix,
+  onReveal, onGrade, onKill, onToggleSpell, onRestartSpell, onExit, onManageKilled, onManageWrong,
+  onSpellWrong,
+}) {
+  const [answer, setAnswer] = useState('');
+  const [hintLevel, setHintLevel] = useState(0);
+  const [missCount, setMissCount] = useState(0);
+  const [solved, setSolved] = useState(false);
+  const inputRef = useRef(null);
+  const touchStart = useRef(null);
+  const item = queue[index];
+  const done = !item;
+
+  /* 换卡就清干净：输入框、提示级数、错误次数、上一张的"拼对了" */
+  useEffect(() => {
+    setAnswer(''); setHintLevel(0); setMissCount(0); setSolved(false);
+    if (spell && !done && inputRef.current) inputRef.current.focus();
+  }, [index, spell, done]);
+
+  /* 键盘快捷键：拼写模式下不抢输入框的键（回车交给表单提交） */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Escape') { e.preventDefault(); onExit(); return; }
+      if (spell) return;                       // 拼写模式只用输入框与按钮
+      if (!revealed && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); onReveal(); return; }
+      if (revealed && KEY_TO_GRADE[e.key]) { e.preventDefault(); onGrade(KEY_TO_GRADE[e.key]); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [revealed, spell, onExit, onReveal, onGrade]);
+
+  const onTouchStart = (e) => {
+    const t = e.touches && e.touches[0];
+    if (t) touchStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd = (e) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    if (!start || spell || !revealed) return;   // 拼写模式下左右滑动会把刚打的字滑没
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    onGrade(dx > 0 ? 'easy' : 'forgot');
+  };
+
+  /* ---------- 拼写检查 ---------- */
+  const submitSpelling = (e) => {
+    if (e) e.preventDefault();
+    if (solved || !item) return;
+    const c = cardOf(item);
+    if (!checkSpelling(answer, c.head)) {
+      setMissCount((n) => n + 1);
+      if (onSpellWrong) onSpellWrong(item, 'spell');   // 拼错就进错词本
+      return;
+    }
+    setSolved(true);
+    // 一次拼对 = 简单；用过提示 = 一般；提示点满（看过答案）= 忘了
+    const grade = hintLevel >= HINT_MAX ? 'forgot' : hintLevel === 0 ? 'easy' : 'normal';
+    setTimeout(() => onGrade(grade), 520);
+  };
+  const useHint = () => {
+    const next = Math.min(HINT_MAX, hintLevel + 1);
+    setHintLevel(next);
+    if (next >= HINT_MAX) {
+      // 第 3 次提示：把答案摆出来，并清空输入框要求重打一遍
+      setAnswer('');
+      if (onSpellWrong) onSpellWrong(item, 'reveal');   // "看了答案"也算没掌握
+      if (inputRef.current) inputRef.current.focus();
+    }
+  };
+
+  /* ---------- 一轮结束 ---------- */
+  if (done) {
+    return (
+      <section className="editor">
+        <div className="panel review-pane">
+          <div className="panel-head"><h2>本轮完成</h2></div>
+          <p className="review-done-line">
+            这一轮复习了 <b>{queue.length}</b> 个词{practice ? (spell ? '（拼写练习）' : '（错词练习）') : ''}。
+            {practice ? '练习模式不改变复习排期。' : '下一次到期时会自动回到「今日待复习」。'}
+          </p>
+          <div className="review-done-actions">
+            <button className="primary-btn" onClick={onRestartSpell}><Sparkles size={15} />用拼写再过一遍这 {queue.length} 个词</button>
+            <button className="ghost-btn" onClick={onExit}>回到查词</button>
+          </div>
+          <p className="muted small review-killed-line">
+            {wrongCount ? (
+              <>
+                错词本里现在有 <b>{wrongCount}</b> 个词。
+                <button className="link-btn" onClick={onManageWrong}>打开错词本</button>
+              </>
+            ) : null}
+            {killedCount ? (
+              <>
+                {wrongCount ? ' · ' : ''}已斩掉 {killedCount} 个词（不再进复习清单）。
+                <button className="link-btn" onClick={onManageKilled}>管理</button>
+              </>
+            ) : null}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const c = cardOf(item);
+  const s = scheduleOf(schedule, item.key, 0);
+
+  return (
+    <section className="editor">
+      <div className="panel review-pane">
+        <div className="panel-head">
+          <h2>复习 {index + 1} / {queue.length}{practice ? (spell ? ' · 拼写练习' : ' · 错词练习') : ''}</h2>
+          {mix && (mix.fav > 0) ? (
+            <span className="queue-mix muted small" title="今日待复习的构成：单词本里的到期词 + 收藏夹里还没收进本子的词">
+              本子 {mix.book} · 收藏 {mix.fav}
+            </span>
+          ) : null}
+          <div className="review-head-tools">
+            <label className="spell-switch" title="打开后要拼对单词才能进入下一个">
+              <input type="checkbox" checked={spell} onChange={(e) => onToggleSpell(e.target.checked)} />
+              <span>拼写模式</span>
+            </label>
+            <button className="ghost-btn sm" onClick={onExit} title="Esc">退出复习</button>
+          </div>
+        </div>
+
+        <div className={'review-word' + (!spell && !revealed ? ' tappable' : '')}
+          onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+          onClick={() => { if (!spell && !revealed) onReveal(); }}>
+          {/* 拼写模式**不能显示词头**（不然就是抄），只给中文、音标与发音 */}
+          {spell
+            ? <strong className="spell-question">{c.meaning || c.brief || '（这个词还没有释义）'}</strong>
+            : <strong>{c.head}</strong>}
+          {c.phonetic ? <span className="phonetic">{c.phonetic}</span> : null}
+          <button className="icon-btn" title="朗读" aria-label="朗读"
+            onClick={(e) => { e.stopPropagation(); speak(c.head); }}><Volume2 size={16} /></button>
+        </div>
+        <p className="muted small">
+          {spell ? '把对应的单词拼出来（拼对才进入下一个）' : `先回想它的意思与用法，再${revealed ? '评分' : '点一下这个词（或按空格）翻面核对'}`}
+        </p>
+
+        {spell ? (
+          <form className="spell-box" onSubmit={submitSpelling}>
+            <div className="spell-input-row">
+              <input ref={inputRef} className={'spell-input' + (missCount && !solved ? ' wrong' : '') + (solved ? ' ok' : '')}
+                value={answer} onChange={(e) => setAnswer(e.target.value)}
+                placeholder="在这里拼写这个单词" autoComplete="off" autoCapitalize="off" spellCheck={false}
+                aria-label="拼写这个单词" disabled={solved} />
+              <button className="primary-btn" type="submit" disabled={solved || !answer.trim()}>
+                {solved ? <Check size={16} /> : null}{solved ? '拼对了' : '检查'}
+              </button>
+            </div>
+            <div className="spell-help">
+              <button type="button" className="ghost-btn sm" onClick={useHint} disabled={hintLevel >= HINT_MAX || solved}>
+                <Lightbulb size={14} />提示 {hintLevel}/{HINT_MAX}
+              </button>
+              {hintLevel > 0 ? <code className="spell-hint">{spellHint(c.head, hintLevel)}</code> : null}
+              {hintLevel >= HINT_MAX && !solved ? <span className="warn-text small">答案已给出 —— 照着重打一遍才能继续</span> : null}
+              {missCount > 0 && !solved ? <span className="spell-wrong small">不对，再试试（已错 {missCount} 次）</span> : null}
+            </div>
+          </form>
+        ) : revealed ? (
+          <div className="review-answer" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+            <div className="chips">
+              {c.pos ? <span className="chip">{c.pos}</span> : null}
+              {c.register ? <span className="chip">{c.register}</span> : null}
+              {c.tone ? <span className="chip">{c.tone}</span> : null}
+              {c.strength ? <span className="chip">强度 {c.strength}</span> : null}
+            </div>
+            <p><strong>{c.meaning}</strong></p>
+            {c.brief ? <p className="muted">{c.brief}</p> : null}
+            {c.diff ? <p className="muted small">与 <b>{c.synWord}</b> 的差别：{c.diff}</p> : null}
+            {c.example ? (
+              <div className="example-line">
+                <em>{c.example.en}</em>
+                <button className="icon-btn" title="朗读例句" aria-label="朗读例句" onClick={() => speak(c.example.en)}><Volume2 size={12} /></button>
+                <span>{c.example.cn}</span>
+              </div>
+            ) : null}
+            {c.fromFavorite ? (
+              <p className="muted small">这条来自收藏夹（还没收进单词本）。</p>
+            ) : null}
+            <div className="grade-bar">
+              {GRADE_KEYS.map((g) => (
+                <button key={g} className={'ghost-btn grade-' + GRADES[g].tone} onClick={() => onGrade(g)}
+                  title={`快捷键 ${g === 'forgot' ? 1 : g === 'normal' ? 2 : 3}`}>
+                  {GRADES[g].label}<span className="muted small">{gradeHint(s, g)}</span>
+                </button>
+              ))}
+            </div>
+            <p className="muted small grade-tip">
+              <span className="desktop-only">键盘：空格翻面 · 1 忘了 / 2 一般 / 3 简单 · Esc 退出</span>
+              <span className="touch-only">左右滑动也能评分：← 忘了 · 简单 →</span>
+            </p>
+          </div>
+        ) : (
+          <button className="primary-btn big" onClick={onReveal} title="空格">显示答案</button>
+        )}
+
+        <div className="review-foot">
+          <button className="ghost-btn sm kill-btn" onClick={() => onKill(item)}
+            title="这个词我认识，以后不要再进复习清单">
+            <Skull size={14} />斩掉（不再复习）
+          </button>
+          {wrongCount ? (
+            <button className="link-btn" onClick={onManageWrong}><BookX size={13} />错词本 {wrongCount} 个</button>
+          ) : null}
+          {killedCount ? (
+            <button className="link-btn" onClick={onManageKilled}><Eye size={13} />已斩掉 {killedCount} 个</button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}

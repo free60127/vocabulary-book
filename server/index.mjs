@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as dnsLookup } from 'node:dns';
 
-import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
-import { sanitizeEntry, sanitizeQuiz, attachDict } from './resultShape.mjs';
+import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
@@ -442,6 +442,33 @@ async function runQuizJob(jobId, { points, count, level, baseUrl, model, apiKey 
   saveJob(job);
 }
 
+/**
+ * 词条追问：学生看完卡片之后再问一句。
+ *
+ * 为什么复用"异步任务 + 轮询"而不是做成流式：这条链路（提交 → 轮询 → 结果）
+ * 已经在弱网和手机端被验证过，追问是同一类耗时操作，多一套流式实现只会多一处会挂的地方。
+ * 追问比查词短得多，所以 maxTokens 收小、超时也短（见 TIMEOUT.followup 前端侧）。
+ */
+async function runFollowupJob(jobId, { head, brief, pos, question, context, level, baseUrl, model, apiKey }) {
+  const job = await findJob(jobId);
+  if (!job) return;
+  job.status = 'running';
+  job.updatedAt = Date.now();
+  saveJob(job);
+  const raw = await callLLM({
+    baseUrl, model, apiKey,
+    system: FOLLOWUP_SYSTEM_PROMPT,
+    user: buildFollowupMessage({ head, brief, pos, question, context, level }),
+    maxTokens: 1200,
+  });
+  const answer = sanitizeFollowup(raw);
+  if (!answer) throw new Error('模型没有给出回答，请换个说法再问一次');
+  job.data = { head, question, answer };
+  job.status = 'done';
+  job.updatedAt = Date.now();
+  saveJob(job);
+}
+
 /* ================= HTTP 层 ================= */
 const DIST = path.join(ROOT, 'dist');
 const MAX_BODY_BYTES = 2 * 1024 * 1024;   // 这个产品只传文本，2MB 足够
@@ -707,7 +734,43 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, jobId, status: 'pending' });
     }
 
-    const jobMatch = p.match(/^\/api\/(lookup|quiz)\/([A-Za-z0-9-]{8,64})$/);
+    /* ---------- 词条追问 ---------- */
+    if (p === '/api/followup' && req.method === 'POST') {
+      if (rateLimited(req)) return json(res, 429, { error: '问得太快了，缓一缓再问' });
+      const body = await readBody(req, 64 * 1024);
+      const head = String(body.head || body.term || '').trim().slice(0, 200);
+      const question = String(body.question || '').trim().slice(0, 500);
+      if (!head) return json(res, 400, { error: '缺少要追问的词' });
+      if (!question) return json(res, 400, { error: '请先写下你的问题' });
+      const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
+      if (ep.error) return json(res, 400, { error: ep.error });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
+      // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
+      const jobId = randomUUID();
+      saveJob({ jobId, kind: 'followup', title: head + ' · 追问', status: 'pending', createdAt: Date.now(), data: null, error: null });
+      safeRun('followup', jobId, () => runFollowupJob(jobId, {
+        head,
+        brief: String(body.brief || '').slice(0, 600),
+        pos: String(body.pos || '').slice(0, 60),
+        question,
+        context: String(body.context || '').slice(0, 600),
+        level: normalizeLevel(body.level),
+        baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
+      }));
+      return json(res, 200, { ok: true, jobId, status: 'pending' });
+    }
+
+    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup)\/([A-Za-z0-9-]{8,64})$/);
     if (jobMatch && req.method === 'GET') {
       const job = await findJob(jobMatch[2]);
       if (!job || job.kind !== jobMatch[1]) return json(res, 404, { error: '任务不存在或已过期，请重新发起' });

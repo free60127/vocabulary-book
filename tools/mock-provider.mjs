@@ -1,0 +1,132 @@
+/**
+ * 本地 mock 供应商：假模型 + 假词典。
+ *
+ * 抽出来的原因：e2e（tools/e2e-vocab.mjs）和用户模拟（tools/sim-user.mjs）都要一套
+ * 一模一样的假数据，各写一份必然漂移 —— 一边改了音标，另一边还在测旧结论。
+ * 放在这里，两边 import 同一份。
+ *
+ * 特殊性：
+ *  · 模型给的音标**故意是错的**、词性**故意漏了动词** —— 词典核对这条链路要能抓住；
+ *  · 词典给的却是对的（ˈɒbdʒɪkt / n. + v.）—— 验证"客观事实以词典为准"。
+ *
+ * 触发词（把词头当命令用）：
+ *   __error__   模型返回 500        → 前端要显示可读错误，不能白屏
+ *   __garbage__ 模型返回非 JSON     → 前端要提示"格式不对，重试"
+ *   __huge__    返回超长连写内容    → 验证长 token 不会把页面撑宽
+ */
+import http from 'node:http';
+
+/* ---------- 词条 fixture ---------- */
+export const entryFor = (head) => ({
+  head,
+  kind: head.includes(' ') ? 'phrase' : 'word',
+  phonetic: '/ɒbˈdʒekt/', pos: '名词', brief: '物体；反对',
+  register: '通用', tone: '中性', strength: '中',
+  meanings: [
+    { pos: '名词', cn: '物体、目标', en: 'a thing you can see and touch' },
+  ],
+  scenes: ['学术写作中表达不同意见', '日常描述实物'],
+  avoid: '不要用它表示"拒绝"（那是 refuse）',
+  mnemonic: { image: '把反对意见"扔"到对方面前', hook: 'ob（反）+ ject（扔）= 对着扔', parts: 'ob-（反对）+ ject（扔）', family: 'objection / objective' },
+  synonyms: [{
+    word: 'oppose', phonetic: '/əˈpəʊz/', cn: '反对', register: '正式', tone: '中性', strength: '强',
+    diff: 'oppose 更强调公开、正式的反对', usage: '正式场合用 oppose，日常用 be against',
+    example: 'They opposed the plan.', exampleCn: '他们反对这个计划。',
+  }],
+  collocations: ['object to sth', 'a solid object'],
+  examples: [{ en: 'She objected to the new rules.', cn: '她反对新规定。', note: '演示 object to 这个搭配' }],
+  confusions: 'object 作动词必须接 to；oppose 直接接宾语。',
+  usageNotes: '作动词时重音在第二节。',
+  examTips: '四六级常考 object to doing 这个结构。',
+});
+
+/** 超长 token：真实场景是模型吐出连写的德语复合词 / 长 URL */
+export const hugeEntry = (head) => ({
+  ...entryFor(head),
+  brief: 'Donaudampfschifffahrtsgesellschaftskapitaenswitwe'.repeat(3),
+  scenes: ['https://example.com/' + 'a'.repeat(160)],
+  examples: [{ en: 'Pneumonoultramicroscopicsilicovolcanoconiosis'.repeat(2), cn: '一个超长的英文单词', note: '' }],
+});
+
+export const QUIZ = {
+  title: '单词本自测 · 3 题',
+  questions: [
+    { type: 'choice', stem: '选出最合适的一项：She ___ to the new rules.', options: ['objected', 'opposed', 'against', 'object'], answer: 'objected', explanation: 'object 作动词要接 to。' },
+    { type: 'fill', stem: '填空：They ___ the plan openly.（公开反对）', options: [], answer: 'opposed', explanation: 'oppose 直接接宾语，更正式。' },
+    { type: 'choice', stem: '哪句更得体？', options: ['I object to this.', 'I oppose to this.'], answer: 'I object to this.', explanation: 'oppose 不与 to 连用。' },
+  ],
+};
+
+/* ---------- 词典 fixture（与模型故意不一致） ---------- */
+export const DICT_SAMPLE = {
+  ec: {
+    exam_type: ['初中', '高中', 'CET4', 'CET6', '考研'],
+    word: [{
+      ukphone: 'ˈɒbdʒɪkt; əbˈdʒekt', usphone: 'ˈɑːbdʒekt; əbˈdʒekt',
+      trs: [{ tr: [{ l: { i: ['n. 物体，实物；目的，目标'] } }] }, { tr: [{ l: { i: ['v. 反对'] } }] }],
+      'return-phrase': { l: { i: 'object' } },
+    }],
+  },
+  simple: {
+    query: 'object',
+    word: [{ 'return-phrase': 'object', multiPhone: { uk: [{ phone: 'ˈɒbdʒɪkt', pos: ['n'] }], us: [{ phone: 'ˈɑːbdʒekt', pos: ['n'] }] } }],
+  },
+  meta: { input: 'object' },
+};
+
+/**
+ * 起两个本地服务：AI（OpenAI 兼容）与词典。
+ * @returns {Promise<{aiBaseUrl:string, dictBaseUrl:string, calls:object, close:()=>Promise<void>}>}
+ */
+export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) {
+  const calls = { ai: 0, dict: 0, terms: [], bodies: [] };
+
+  const ai = http.createServer((q, r) => {
+    let b = '';
+    q.on('data', (c) => { b += c; });
+    q.on('end', async () => {
+      calls.ai += 1;
+      calls.bodies.push(b);
+      const term = (/【查询内容】([^\n\\]+)/.exec(b) || [])[1]?.trim() || 'object';
+      calls.terms.push(term);
+      const isQuiz = /自测题|出题/.test(b);
+      const send = (code, payload) => {
+        r.writeHead(code, { 'Content-Type': 'application/json' });
+        r.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
+      };
+      if (delayMs) await new Promise((res) => setTimeout(res, delayMs));
+      // 追问：返回**纯文本**回答（真实链路里也是纯文本，不是 JSON）
+      if (/【学生的问题】/.test(b)) {
+        // 请求体是 JSON：真实换行在里面是「反斜杠 + n」两个字符，
+        // 所以字符类要连反斜杠一起排掉，否则会把后面那句"请直接回答"也吞进问题里
+        const q = (/【学生的问题】([^\n\\]+)/.exec(b) || [])[1] || '';
+        return send(200, { choices: [{ message: { content: '好的，我来回答：object 作名词是"物体"，作动词要接 to —— object to sth。' + (q ? '（问题：' + q.slice(0, 20) + '）' : '') } }] });
+      }
+      if (term === '__error__') return send(500, { error: { message: 'mock upstream exploded' } });
+      if (term === '__garbage__') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
+      const payload = isQuiz ? QUIZ : (term === '__huge__' ? hugeEntry(term) : entryFor(term));
+      return send(200, { choices: [{ message: { content: JSON.stringify(payload) } }] });
+    });
+  });
+
+  const dict = http.createServer((q, r) => {
+    calls.dict += 1;
+    r.writeHead(200, { 'Content-Type': 'application/json' });
+    // 只有 object 查得到 —— 其余词条要验证"词典静默降级为纯 AI"
+    const url = q.url || '';
+    r.end(JSON.stringify(/object/i.test(decodeURIComponent(url)) ? DICT_SAMPLE : { ec: {}, simple: {}, meta: {} }));
+  });
+
+  await new Promise((res) => ai.listen(aiPort, '127.0.0.1', res));
+  await new Promise((res) => dict.listen(dictPort, '127.0.0.1', res));
+
+  return {
+    aiBaseUrl: `http://127.0.0.1:${aiPort}/v1`,
+    dictBaseUrl: `http://127.0.0.1:${dictPort}`,
+    calls,
+    close: () => Promise.all([
+      new Promise((res) => ai.close(res)),
+      new Promise((res) => dict.close(res)),
+    ]),
+  };
+}

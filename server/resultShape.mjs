@@ -209,3 +209,33 @@ export function sanitizeQuiz(raw) {
     questions,
   };
 }
+
+/**
+ * 追问回答的清洗。
+ *
+ * 刻意做得**比查词宽松**：这里要的是人话，不是结构化数据。
+ * 只做三件事：去掉代码块围栏、去掉模型爱加的开场白、限长。
+ * （模型偶尔还是会吐 JSON —— 那就把里面的 text/answer 字段抠出来，
+ *   总比把一整段 JSON 显示给用户强。）
+ */
+export function sanitizeFollowup(raw) {
+  if (isPlainObject(raw)) {
+    const pick = raw.answer || raw.text || raw.reply || raw.content;
+    if (typeof pick === 'string') return sanitizeFollowup(pick);
+  }
+  let text = boundedString(raw, 8000);
+  // ```json ... ``` / ``` ... ``` 围栏
+  text = text.replace(/^\s*```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
+  // 模型爱加的开场白（"好的，我来回答："这类），去掉它用户才能一眼看到正题。
+  // ⚠️ 这里**不能**用 `[^\n]{0,20}` 去兜"回答如下"这类尾巴 —— 它是贪婪的，
+  // 会把冒号后面的正文一起吃掉（实测：整段回答被剥成空串）。
+  text = text.replace(/^(好的|当然|没问题|明白)[，,。!！]?\s*(我来|我|帮你|给你)?\s*(回答|说|解释|讲|答)(一下|如下|这个问题)?[:：]?\s*/, '').trim();
+  if (text.startsWith('{')) {
+    try {
+      const obj = JSON.parse(text);
+      const pick = obj.answer || obj.text || obj.reply || obj.content;
+      if (typeof pick === 'string' && pick.trim()) text = pick.trim();
+    } catch { /* 不是 JSON 就原样留着 */ }
+  }
+  return text.slice(0, 4000).trim();
+}

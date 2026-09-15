@@ -190,3 +190,36 @@ export function buildQuizMessage({ points, count, level = DEFAULT_LEVEL }) {
     + '【词条清单】\n' + points.map((p, i) => (i + 1) + '. ' + p).join('\n')
     + '\n\n请按要求输出完整 JSON。';
 }
+
+/* ---------- 词条追问（看完卡片之后的"再问一句"） ---------- */
+/**
+ * 追问与查词的区别：查词要的是一张**完整的卡**（十几个板块、固定结构），
+ * 追问要的是**针对一个具体问题的两三句话** —— 拿查词提示词去回答"这两个词有什么区别"，
+ * 模型会再吐一整张卡出来，用户问的那一句反而被淹掉。
+ */
+export const FOLLOWUP_SYSTEM_PROMPT = `你是英语词汇老师。学生刚看完一个词的讲解卡片，现在有**一个具体问题**要问。
+
+要求：
+1. **直接回答问题**，不要重新讲一遍这个词的全部信息；
+2. 需要举例就举例（英文例句 + 中文翻译），例句要短、要像人话；
+3. 涉及辨析时，明确说清"什么时候用哪个"，并给一句能体现差别的例子；
+4. 用简体中文回答（英文词、例句保留英文）；
+5. 控制在 300 字以内；确实需要更多才展开，最多 500 字；
+6. 只输出回答正文，不要 JSON、不要 markdown 标题、不要"好的，我来回答"这类开场白。
+
+不确定的地方（比如某个冷门用法是否有地区差异）就直说"不确定"，**不要编**。`;
+
+/**
+ * @param {{head:string, brief?:string, pos?:string, question:string, context?:string, level?:string}} o
+ *   context = 卡片上的关键信息（释义/近义词差别等），给模型一点"学生看的是什么"的背景
+ */
+export function buildFollowupMessage({ head, brief = '', pos = '', question, context = '', level = DEFAULT_LEVEL }) {
+  const L = normalizeLevel(level);
+  return '【学生正在看的词】' + head
+    + (pos ? '（' + pos + '）' : '')
+    + (brief ? '\n【卡片上的释义】' + brief : '')
+    + (context ? '\n【卡片上的相关讲解】' + context : '')
+    + '\n【讲解深度】' + L.key
+    + '\n\n【学生的问题】' + question
+    + '\n\n请直接回答这个问题。';
+}

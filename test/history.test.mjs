@@ -185,5 +185,35 @@ const bytes = (v) => JSON.stringify(v).length;
 
 console.log('\n' + '='.repeat(62));
 const failed = results.filter((r) => !r.ok);
+
+/* ---------- 已斩掉 / 已收回：跨设备要按"谁更晚"决胜负 ----------
+   单纯做并集的话，"收回"永远赢不了斩掉，用户会在另一台设备上看到
+   "明明收回了，下次同步又回来了"。所以两边都记时间戳，取每个词更晚的那次操作。 */
+{
+  const empty2 = { books: [], review: {}, days: [], history: [], favorites: [], killed: {}, revived: {} };
+  const a = mergeSnapshot({ ...empty2, killed: { object: 100, banana: 500 } }, { killed: { object: 300, cherry: 200 } });
+  check('斩掉清单取并集，同一词取更晚的时间戳', a.killed.object === 300 && a.killed.banana === 500 && a.killed.cherry === 200,
+    JSON.stringify(a.killed));
+  const b = mergeSnapshot({ ...empty2, killed: { object: 100 }, revived: { object: 200 } }, { killed: {} });
+  check('本机"收回"比云端"斩掉"更晚 → 保留收回', b.killed.object === 100 && b.revived.object === 200);
+  const c = mergeSnapshot({ ...empty2, revived: { object: 200 } }, { killed: { object: 900 } });
+  check('云端又斩了一次（更晚）→ 斩掉重新生效', c.killed.object === 900);
+  const d = mergeSnapshot({ ...empty2, killed: 'garbage', revived: null }, { killed: { x: 'NaN' } });
+  check('斩掉/收回的脏数据不会崩也不会污染', typeof d.killed === 'object' && d.killed.x === undefined, JSON.stringify(d.killed));
+}
+
+
+/* ---------- 错词本跨设备合并（storage 层） ---------- */
+{
+  const empty3 = { books: [], review: {}, days: [], history: [], favorites: [], killed: {}, revived: {}, wrong: {} };
+  const m = mergeSnapshot(
+    { ...empty3, wrong: { object: { head: 'object', count: 2, at: 100 } } },
+    { wrong: { object: { head: 'object', count: 5, at: 50 }, banana: { head: 'banana', count: 1, at: 10 } } },
+  );
+  check('错词本合并：取次数更多的那份', m.wrong.object.count === 5, JSON.stringify(m.wrong));
+  check('错词本合并：另一台独有的词并进来', Boolean(m.wrong.banana));
+  check('错词本脏数据不会崩', Object.keys(mergeSnapshot({ ...empty3, wrong: 'x' }, { wrong: null }).wrong).length === 0);
+}
+
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

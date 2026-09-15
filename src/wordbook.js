@@ -141,9 +141,36 @@ export function findEntryBook(list, entryId) {
 }
 
 /**
- * 把一个词条放进指定本子。
- * 同 id 覆盖（不新增），并按 head 判重：同一个词查两次不该变成两条
- * （但 id 不同、head 相同的两条也不该合并 —— 用户可能故意分开存不同语境）。
+ * 词头归一化：大小写、首尾空格、中间多空格都算同一个词。
+ * "Object" 和 "object" 对用户是同一个词 —— 他查第二遍不是为了再存一条。
+ */
+export const normalizeHead = (head) => String(head || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+/** 在本子里按词头找下标（-1 = 没有） */
+export function findEntryIndexByHead(entries, head) {
+  const key = normalizeHead(head);
+  if (!key) return -1;
+  return (entries || []).findIndex((e) => e && normalizeHead(e.head) === key);
+}
+
+/** 按词头找"这个词在哪个本子里" —— 卡片上的「已在『X』里」用它 */
+export function findBookByHead(list, head) {
+  const key = normalizeHead(head);
+  if (!key) return null;
+  for (const b of list || []) {
+    if ((b.entries || []).some((e) => e && normalizeHead(e.head) === key)) return b;
+  }
+  return null;
+}
+
+/**
+ * 把一个词条放进指定本子。两条判重规则，缺一条都会让用户看到重复条目：
+ *  ① **同 id 覆盖**（同一张卡片重复点保存）；
+ *  ② **同词头覆盖** —— 同一个词查两次会拿到两个不同的服务端 id（每次查词都是一个新任务），
+ *     只按 id 判重的话本子里会并排出现两条一模一样的词条，复习排期也跟着裂成两份。
+ *     命中时**保留旧 id 与加入时间**：排期是按 id 存的，换 id 等于把这个词的复习进度丢掉。
+ * （合并两份快照时不做这种折叠：id 不同、词头相同的两条可能是用户故意分开存的，
+ *   那是 mergeBooks 的事，跟"新查一次"不是同一个场景。）
  * @returns {{list: Array, replaced: boolean}}
  */
 export function upsertEntry(list, bookId, rawEntry) {
@@ -152,14 +179,22 @@ export function upsertEntry(list, bookId, rawEntry) {
   let replaced = false;
   const next = (list || []).map((b) => {
     if (b.id !== bookId) return b;
-    const idx = (b.entries || []).findIndex((e) => e.id === entry.id);
+    const entries = Array.isArray(b.entries) ? b.entries : [];
+    const idx = entries.findIndex((e) => e.id === entry.id);
     if (idx >= 0) {
       replaced = true;
-      const entries = [...b.entries];
-      entries[idx] = { ...entry, createdAt: b.entries[idx].createdAt || entry.createdAt };
-      return { ...b, entries };
+      const out = [...entries];
+      out[idx] = { ...entry, createdAt: entries[idx].createdAt || entry.createdAt };
+      return { ...b, entries: out };
     }
-    return { ...b, entries: [...(b.entries || []), entry] };
+    const sameHead = findEntryIndexByHead(entries, entry.head);
+    if (sameHead >= 0) {
+      replaced = true;
+      const out = [...entries];
+      out[sameHead] = { ...entry, id: entries[sameHead].id, createdAt: entries[sameHead].createdAt || entry.createdAt };
+      return { ...b, entries: out };
+    }
+    return { ...b, entries: [...entries, entry] };
   });
   return { list: next, replaced };
 }

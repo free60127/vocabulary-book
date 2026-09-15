@@ -16,7 +16,9 @@
     "test:ui": "vitest run",
     "test:e2e": "node tools/e2e-vocab.mjs",
     "smoke:live": "node tools/smoke-live.mjs",
-    "test:pdf": "node tools/e2e-pdf.mjs"
+    "test:pdf": "node tools/e2e-pdf.mjs",
+    "test:sim": "node tools/sim-user.mjs",
+    "test:sim:fast": "node tools/sim-user.mjs desktop iphone13 iphonese"
   },
   "dependencies": {
     "lucide-react": "0.468.0",

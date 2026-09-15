@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Check, FileDown, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
+import { ArrowRight, Check, FileDown, LoaderCircle, MessageCircleQuestion, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { speak } from '../speak.js';
 
@@ -26,6 +26,9 @@ function DictBadge({ dict, conflicts }) {
     </div>
   );
 }
+
+/** 追问的快捷入口：用户九成会问的就这几句，点一下比打字快 */
+const ASK_PRESETS = ['和近义词的区别？', '给我 3 个例句', '常见搭配有哪些', '考试容易怎么考'];
 
 /**
  * 词典原文：把"权威事实"原文列出来，让用户能自己复核 AI 的讲解。
@@ -72,8 +75,9 @@ function DictSection({ dict }) {
  * 学习者是先想知道"这词什么意思、能不能用"，再关心"和近义词差在哪"。
  */
 export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen',
-  onToggleFavorite, isFavorite, onLookupWord }) {
+  onToggleFavorite, isFavorite, onLookupWord, onAsk, askBusy, askError, followups, onClearFollowups }) {
   const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
+  const [askText, setAskText] = useState('');
   const saved = Boolean(existing);
   // 打印/导出 PDF 时去掉一切交互件：朗读按钮、保存栏在纸上毫无意义，只会占地方。
   // 用 variant 显式区分，而不是靠 @media print 去 display:none —— 那样很容易漏（漏了就是
@@ -230,6 +234,56 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
       ) : null}
 
       <DictSection dict={dict} />
+
+      {/* ---------- 追问 ----------
+          看完卡片常见的是"再问一句"：这两个词到底差在哪、能不能造个句子、考试会怎么考。
+          以前只能重新查一次（还会生成一整张新卡），或者干脆算了。
+          这里复用异步任务 + 轮询那条链路（弱网与手机端已经验证过），答案是纯文本。 */}
+      {forPrint || !onAsk ? null : (
+        <section className="sheet-section ask-section">
+          <div className="section-heading">
+            <span className="label-dot" />
+            <h2>追问一句</h2>
+            <span className="muted small">就这个词再问点具体的</span>
+          </div>
+          {followups && followups.length ? (
+            <ul className="ask-list">
+              {followups.map((it, i) => (
+                <li key={i} className="ask-item">
+                  <div className="ask-q">{it.q}</div>
+                  <div className="ask-a">{it.a}</div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="ask-chips">
+            {ASK_PRESETS.map((p) => (
+              <button key={p} className="chip-btn" disabled={askBusy} onClick={() => onAsk(p)}>{p}</button>
+            ))}
+          </div>
+          <form className="ask-row" onSubmit={(e) => {
+            e.preventDefault();
+            const v = askText.trim();
+            if (!v || askBusy) return;
+            setAskText('');
+            onAsk(v);
+          }}>
+            <input className="ask-input" value={askText} onChange={(e) => setAskText(e.target.value)}
+              placeholder="例如：和 oppose 到底怎么选？给我 3 个例句。" maxLength={200} disabled={askBusy} />
+            <button className="primary-btn" type="submit" disabled={askBusy || !askText.trim()}>
+              {askBusy ? <LoaderCircle className="spin" size={15} /> : <MessageCircleQuestion size={15} />}
+              {askBusy ? '回答中…' : '问'}
+            </button>
+          </form>
+          {askError ? <p className="ask-error small" role="alert">{askError}</p> : null}
+          {followups && followups.length ? (
+            <p className="muted small ask-foot">
+              追问记录只存在这台设备（不占同步体积）。
+              <button className="link-btn" onClick={onClearFollowups}>清空记录</button>
+            </p>
+          ) : null}
+        </section>
+      )}
 
       {forPrint ? null : (
       <div className="save-bar">

@@ -3,8 +3,12 @@
 # 为什么要单独一个 workflow：部署工作流只在**前端文件**变化时触发，
 # 改 server/ 的提交根本不经过它 —— 也就是说改后端可以完全绕过测试。
 #
-# 注意：真实浏览器 e2e（tools/e2e-vocab.mjs）需要 Playwright，CI 里不装（省时间），
-# 所以那条链路只在本地跑（npm run test:e2e）；纯 node 的回归都在下面几步。
+# 分两个 job：
+#   test      —— 纯 node（lint / 单测 / 构建），几十秒，永远跑；
+#   browser   —— 真实 Chromium（e2e 69 项 + PDF 11 项 + 用户模拟 258 项）。
+#                以前这条链路只在本地跑，理由是"CI 装 Playwright 太慢"，
+#                代价是**手机端的回归完全没人守**（横向溢出、点不中的按钮、
+#                返回键退出应用，全是这一层抓出来的）。所以宁可多花两分钟。
 name: CI（测试）
 
 on:
@@ -40,3 +44,45 @@ jobs:
 
       - name: 构建（构建失败同样不该放过）
         run: npm run build
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # --no-save：playwright 只是测试工具，不进 package.json 的依赖树
+      # （本地开发机上通常已经有共享安装，tools/playwright.mjs 会自己找）
+      - name: 装 Playwright 与 Chromium
+        run: |
+          npm i --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: 构建前端（e2e 打的是 dist）
+        run: npm run build
+
+      - name: 全链路 e2e（真实 Chromium，自带 mock 模型与词典）
+        run: npm run test:e2e
+
+      - name: PDF 导出（真的生成 PDF 再看内容）
+        run: npm run test:pdf
+
+      - name: 用户模拟（桌面 + iPhone 13 + iPhone SE 三种设备，含深色模式/离线/双设备同步）
+        run: npm run test:sim:fast
+
+      # 失败时把逐屏截图带走：手机端的布局问题光看日志看不出来
+      - name: 上传截图（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-screenshots
+          path: test/agent_out/sim/
+          retention-days: 7
+          if-no-files-found: ignore

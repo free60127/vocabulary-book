@@ -343,13 +343,15 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
 
       await kv.set(K_RESET(e), JSON.stringify({ h: sha256Hex(code), at: Date.now() }), RESET_TTL_SEC);
 
-      const service = env.SERVICE_NAME || '回译本';
+      // 默认服务名必须是这个应用自己的：这段代码从姊妹项目搬来，默认值原来写死成
+      // 「回译本」—— 没设 SERVICE_NAME 的部署里，用户收到的密码重置邮件会署名另一个产品。
+      const service = env.SERVICE_NAME || '单词本';
       const r = await mail({
         to: e,
         subject: `${service} - 密码重置验证码`,
         text: `你的密码重置验证码是：${code}\n\n15 分钟内有效。\n\n`
           + `⚠️ 重要：重置密码后，用旧密码加密的「同步码」将无法自动解锁。\n`
-          + `如果你还想找回原来的课文库和收藏，请先在还登录着的设备上导出备份，\n`
+          + `如果你还想找回原来的单词本与复习进度，请先在还登录着的设备上导出备份，\n`
           + `或提前把同步码抄下来。\n`,
         env, sent,
       });

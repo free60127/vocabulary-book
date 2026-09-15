@@ -183,3 +183,214 @@ export function summarizeStreak(days, now = Date.now()) {
 export const mergeDays = (a, b) => [...new Set([
   ...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : []),
 ])].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse().slice(0, 400);
+
+/* ==========================================================================
+   复习队列：单词本词条 + 收藏夹 + 已斩掉的词
+   --------------------------------------------------------------------------
+   为什么要收口成一个纯函数：这三样东西的"谁进队列、谁不进"是**业务规则**，
+   以前写死在组件的 useMemo 里，改一次要靠肉眼确认没把别的东西带进来。
+   抽到这里之后可以直接单测（见 test/review.test.mjs）。
+   ========================================================================== */
+
+/** 词头归一化：同一个词的不同写法/大小写/空格都算同一个（与 wordbook.js 保持一致） */
+export const headKey = (head) => String(head || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * 已斩掉的词集合。
+ * 存的是 `{ 词头: 时间戳 }` + 一份"复活"记录，两边都取每个词的最新时间戳再比大小 ——
+ * 这样 A 设备斩掉、B 设备恢复之后，合并结果以**更晚的那次操作**为准
+ * （单纯做并集的话，恢复永远赢不了，用户会看到"斩掉的词又回来了"）。
+ */
+export function killedSet(killed, revived) {
+  const k = killed && typeof killed === 'object' ? killed : {};
+  const r = revived && typeof revived === 'object' ? revived : {};
+  const out = new Set();
+  for (const key of Object.keys(k)) {
+    if (!key) continue;
+    const at = Number(k[key]) || 0;
+    const back = Number(r[key]) || 0;
+    if (at > back) out.add(key);
+  }
+  return out;
+}
+
+/** 单个词头是否被斩掉 */
+export const isKilledHead = (killed, revived, head) => killedSet(killed, revived).has(headKey(head));
+
+/**
+ * 组一份"今天要复习什么"的清单。
+ *
+ * 规则（每条都对应一个用户会遇到的场景）：
+ *  ① 单词本里的词条：到期的都要；
+ *  ② 收藏夹里**还没收进单词本**的词也要 —— 收藏夹就是"回头细看"，
+ *     只躺在侧栏里等于永远不看；已经在某个本子里的不再重复出现（同一个词复习两次很烦）；
+ *  ③ 被斩掉的词一律不进（用户明确说过"这个我认识，别再问我"）。
+ *
+ * @returns {Array<{key,kind,head,phonetic,schedule,entry?,favorite?}>} 按"拖得最久"排序
+ */
+export function buildReviewQueue({ entries, favorites, schedule, killed, revived, now = Date.now() }) {
+  const dead = killedSet(killed, revived);
+  const bookHeads = new Set();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (e && e.head) bookHeads.add(headKey(e.head));
+  }
+  const out = [];
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (!e || !e.id || dead.has(headKey(e.head))) continue;
+    out.push({ key: e.id, kind: 'entry', head: e.head, phonetic: e.phonetic || '', entry: e, schedule: scheduleOf(schedule, e.id, e.createdAt, now) });
+  }
+  for (const f of Array.isArray(favorites) ? favorites : []) {
+    if (!f || !f.id || !f.head) continue;
+    const key = headKey(f.head);
+    if (dead.has(key) || bookHeads.has(key)) continue;   // 斩掉的 / 已经在单词本里的，都不重复进
+    out.push({ key: f.id, kind: 'favorite', head: f.head, phonetic: f.phonetic || '', favorite: f, schedule: scheduleOf(schedule, f.id, f.at || 0, now) });
+  }
+  return out.filter((x) => x.schedule.due <= now).sort((a, b) => a.schedule.due - b.schedule.due);
+}
+
+/**
+ * 拼写判定：忽略大小写、首尾空格、连续空格；词条里的 "to " 这类前缀也容忍
+ * （用户手打时不会去区分 "object to sth" 和 "object"）。
+ */
+const TAIL_WORDS = new Set(['to', 'for', 'with', 'on', 'in', 'of', 'at', 'about', 'into', 'from',
+  'sth', 'sb', 'someone', 'something', 'doing', 'that', 'whether', 'up', 'off']);
+export function checkSpelling(input, head) {
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const want = norm(head);
+  const got = norm(input);
+  if (!got) return false;
+  if (got === want) return true;
+  // "object to sth" / "object to doing" 这类词条：允许用户只打主词
+  // （但 "pull off" / "no sooner ... than" 必须打全 —— 否则打一个 "no" 就算对了）
+  const parts = want.split(' ');
+  const first = parts[0];
+  if (parts.length > 1 && got === first && TAIL_WORDS.has(parts[1])) return true;
+  const main = want.split(/[(（,，;；/]/)[0].trim();
+  return Boolean(main) && got === main && main !== first;
+}
+
+/** 提示分三级：首字母 → 一半字母 → 整个答案 */
+export function spellHint(head, level) {
+  const w = String(head || '');
+  if (!w) return '';
+  if (level <= 1) return w.slice(0, 1) + ' ' + '_'.repeat(Math.max(0, w.length - 1));
+  if (level === 2) {
+    const keep = Math.ceil(w.length / 2);
+    return w.slice(0, keep) + ' ' + '_'.repeat(Math.max(0, w.length - keep));
+  }
+  return w;
+}
+
+/* ==========================================================================
+   错词本：复习里"没答上来"的词单独攒一份
+   --------------------------------------------------------------------------
+   为什么要有：SM-2 的排期决定"什么时候再问"，但用户还需要一个地方回答
+   "我到底哪些词不行" —— 三天后到期的词里混着早就掌握的和一直错的，
+   只看"今日待复习"分不出来。错词本也是"考前一小时该看什么"的答案。
+   规则：
+     · 评「忘了」、拼写出错、拼写提示点满 → 进错词本（次数累加）；
+     · 评「简单」或一次拼对 → 出本（说明这个坎过去了）；
+     · 跨设备合并时按词头取"次数最多 + 最近一次"，不累加（同一份错不该被数两遍）。
+   ========================================================================== */
+
+/** 一条错词记录：`{ head, brief, phonetic, count, reason, at, firstAt }` */
+export function addWrong(map, head, reason = 'forgot', extra = {}, now = Date.now()) {
+  const key = headKey(head);
+  if (!key) return map && typeof map === 'object' ? map : {};
+  const base = map && typeof map === 'object' ? map : {};
+  const prev = base[key] && typeof base[key] === 'object' ? base[key] : null;
+  return {
+    ...base,
+    [key]: {
+      head: String(head || '').slice(0, 200),
+      brief: String((extra && extra.brief) || (prev && prev.brief) || '').slice(0, 600),
+      phonetic: String((extra && extra.phonetic) || (prev && prev.phonetic) || '').slice(0, 120),
+      count: Math.min(999, ((prev && Number(prev.count)) || 0) + 1),
+      reason: ['forgot', 'spell', 'reveal'].includes(reason) ? reason : 'forgot',
+      at: now,
+      firstAt: (prev && Number(prev.firstAt)) || now,
+    },
+  };
+}
+
+/** 答对了就出本（"这个坎过去了"） */
+export function clearWrong(map, head) {
+  const key = headKey(head);
+  if (!key || !map || typeof map !== 'object' || !map[key]) return map || {};
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
+/** 跨设备合并：每个词取次数更多、时间更近的那份（累加会把同一份错数两遍） */
+export function mergeWrong(a, b, limit = 2000) {
+  const out = { ...(a && typeof a === 'object' ? a : {}) };
+  for (const [key, raw] of Object.entries(b && typeof b === 'object' ? b : {})) {
+    if (!key || !raw || typeof raw !== 'object') continue;
+    const cur = out[key];
+    const incCount = Math.min(999, Math.max(0, Number(raw.count) || 0));
+    const curCount = cur ? Math.min(999, Math.max(0, Number(cur.count) || 0)) : -1;
+    const incAt = Number(raw.at) || 0;
+    const curAt = cur ? Number(cur.at) || 0 : -1;
+    if (!cur || incCount > curCount || (incCount === curCount && incAt > curAt)) out[key] = { ...raw, count: incCount };
+  }
+  const entries = Object.entries(out).sort((x, y) => (Number(y[1] && y[1].at) || 0) - (Number(x[1] && x[1].at) || 0)).slice(0, limit);
+  return Object.fromEntries(entries);
+}
+
+/**
+ * 错词清单（给人看的）：补上释义，按"错得最多 / 最近错"排序。
+ * 词条已被删掉也要能显示 —— 用户得看得见、清得掉，否则错词本会一直挂着幽灵条目。
+ */
+export function wrongList(map, entries, favorites) {
+  const byHead = new Map();
+  for (const e of Array.isArray(entries) ? entries : []) {
+    if (e && e.head) byHead.set(headKey(e.head), { brief: (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || '', phonetic: e.phonetic || '', inBook: true });
+  }
+  for (const f of Array.isArray(favorites) ? favorites : []) {
+    if (f && f.head && !byHead.has(headKey(f.head))) byHead.set(headKey(f.head), { brief: f.brief || '', phonetic: f.phonetic || '', inBook: false });
+  }
+  return Object.entries(map && typeof map === 'object' ? map : {})
+    .filter(([key, v]) => key && v && typeof v === 'object')
+    .map(([key, v]) => {
+      const hit = byHead.get(key);
+      return {
+        key,
+        head: v.head || key,
+        brief: (hit && hit.brief) || v.brief || '',
+        phonetic: (hit && hit.phonetic) || v.phonetic || '',
+        count: Math.max(1, Number(v.count) || 1),
+        reason: v.reason || 'forgot',
+        at: Number(v.at) || 0,
+        inBook: Boolean(hit && hit.inBook),
+        exists: Boolean(hit),
+      };
+    })
+    .sort((a, b) => (b.count - a.count) || (b.at - a.at));
+}
+
+/** 错词本的复习卡：优先用本子里的完整词条，其次收藏项，都没有就用错词记录里的那点信息 */
+export function buildWrongQueue({ wrong, entries, favorites, schedule, killed, revived, now = Date.now() }) {
+  const dead = killedSet(killed, revived);
+  const eByHead = new Map();
+  for (const e of Array.isArray(entries) ? entries : []) if (e && e.head) eByHead.set(headKey(e.head), e);
+  const fByHead = new Map();
+  for (const f of Array.isArray(favorites) ? favorites : []) if (f && f.head && !fByHead.has(headKey(f.head))) fByHead.set(headKey(f.head), f);
+  return wrongList(wrong, entries, favorites)
+    .filter((w) => !dead.has(w.key))
+    .map((w) => {
+      const entry = eByHead.get(w.key);
+      const favorite = entry ? null : fByHead.get(w.key);
+      const key = entry ? entry.id : favorite ? favorite.id : 'wrong:' + w.key;
+      return {
+        key,
+        kind: entry ? 'entry' : favorite ? 'favorite' : 'wrong',
+        head: w.head,
+        phonetic: w.phonetic,
+        brief: w.brief,
+        entry, favorite,
+        wrong: { count: w.count, reason: w.reason },
+        schedule: scheduleOf(schedule, key, 0, now),
+      };
+    });
+}

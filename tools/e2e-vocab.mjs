@@ -8,18 +8,14 @@
  *
  * 跑法：node tools/e2e-vocab.mjs   （需要 tools 里能拿到 playwright；先 npm run build）
  */
-import http from 'node:http';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { startMockProvider } from './mock-provider.mjs';
 
-let chromium;
-try {
-  ({ chromium } = await import('file:///D:/AI/66666-main/tools/shotter/node_modules/playwright/index.mjs'));
-} catch {
-  console.error('缺少 playwright：本机跑 `cd D:/AI/66666-main/tools/shotter && npm i` 后再执行（CI 不跑这条链路）。');
-  process.exit(2);
-}
+import { requirePlaywright } from './playwright.mjs';
+
+const { chromium } = await requirePlaywright();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PORT = Number(process.env.E2E_PORT || 8811);
@@ -28,77 +24,17 @@ const DICT_MOCK = Number(process.env.E2E_DICT_MOCK || 9812);
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 /* ---------- mock 模型：查词返回词条，出题返回题目 ---------- */
-const entryFor = (head) => ({
-  head, kind: head.includes(' ') ? 'phrase' : 'word',
-  // 故意给一个**错的**音标（重音位置错）和一个漏掉动词词性的 pos：
-  // 词典核对必须把它纠正过来，这正是"怕 AI 编"要防的那类错
-  phonetic: '/ɒbˈdʒekt/', pos: '名词', brief: '物体；反对',
-  register: '通用', tone: '中性', strength: '中',
-  meanings: [
-    // 只给名词：模型"漏掉动词词性"是很典型的一种不全，词典核对要能指出来
-    { pos: '名词', cn: '物体、目标', en: 'a thing you can see and touch' },
-  ],
-  scenes: ['学术写作中表达不同意见', '日常描述实物'],
-  avoid: '不要用它表示"拒绝"（那是 refuse）',
-  mnemonic: { image: '把反对意见"扔"到对方面前', hook: 'ob（反）+ ject（扔）= 对着扔', parts: 'ob-（反对）+ ject（扔）', family: 'objection / objective' },
-  synonyms: [{
-    word: 'oppose', phonetic: '/əˈpəʊz/', cn: '反对', register: '正式', tone: '中性', strength: '强',
-    diff: 'oppose 更强调公开、正式的反对', usage: '正式场合用 oppose，日常用 be against',
-    example: 'They opposed the plan.', exampleCn: '他们反对这个计划。',
-  }],
-  collocations: ['object to sth', 'a solid object'],
-  examples: [{ en: 'She objected to the new rules.', cn: '她反对新规定。', note: '演示 object to 这个搭配' }],
-  confusions: 'object 作动词必须接 to；oppose 直接接宾语。',
-  usageNotes: '作动词时重音在第二节。',
-  examTips: '四六级常考 object to doing 这个结构。',
-});
-const QUIZ = {
-  title: '单词本自测 · 3 题',
-  questions: [
-    { type: 'choice', stem: '选出最合适的一项：She ___ to the new rules.', options: ['objected', 'opposed', 'against', 'object'], answer: 'objected', explanation: 'object 作动词要接 to。' },
-    { type: 'fill', stem: '填空：They ___ the plan openly.（公开反对）', options: [], answer: 'opposed', explanation: 'oppose 直接接宾语，更正式。' },
-    { type: 'choice', stem: '哪句更得体？', options: ['I object to this.', 'I oppose to this.'], answer: 'I object to this.', explanation: 'oppose 不与 to 连用。' },
-  ],
-};
-const mock = http.createServer((q, r) => {
-  let b = ''; q.on('data', (c) => { b += c; });
-  q.on('end', () => {
-    const isQuiz = /自测题|出题/.test(b);
-    const m = /【查询内容】([^\n\\]+)/.exec(b);
-    const payload = isQuiz ? QUIZ : entryFor(m ? m[1].trim() : 'object');
-    r.writeHead(200, { 'Content-Type': 'application/json' });
-    r.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] }));
-  });
-});
-await new Promise((r) => mock.listen(MOCK, '127.0.0.1', r));
+/* ---------- mock 模型 / mock 词典 ----------
+ * 假数据统一放在 tools/mock-provider.mjs：用户模拟（sim-user.mjs）用的是同一份。
+ * 各写一份必然漂移 —— 一边改了音标，另一边还在用旧结论断言。 */
+const mocks = await startMockProvider({ aiPort: MOCK, dictPort: DICT_MOCK });
 
-/* ---------- mock 词典：故意和模型"说的不一样"，用来验证以词典为准 ---------- */
-const DICT_SAMPLE = {
-  ec: {
-    exam_type: ['初中', '高中', 'CET4', 'CET6', '考研'],
-    word: [{
-      ukphone: 'ˈɒbdʒɪkt; əbˈdʒekt', usphone: 'ˈɑːbdʒekt; əbˈdʒekt',
-      trs: [{ tr: [{ l: { i: ['n. 物体，实物；目的，目标'] } }] }, { tr: [{ l: { i: ['v. 反对'] } }] }],
-      'return-phrase': { l: { i: 'object' } },
-    }],
-  },
-  simple: {
-    query: 'object',
-    word: [{ 'return-phrase': 'object', multiPhone: { uk: [{ phone: 'ˈɒbdʒɪkt', pos: ['n'] }], us: [{ phone: 'ˈɑːbdʒekt', pos: ['n'] }] } }],
-  },
-  meta: { input: 'object' },
-};
-const dictMock = http.createServer((q, r) => {
-  r.writeHead(200, { 'Content-Type': 'application/json' });
-  r.end(JSON.stringify(DICT_SAMPLE));
-});
-await new Promise((r) => dictMock.listen(DICT_MOCK, '127.0.0.1', r));
 
 const server = spawn(process.execPath, ['server/index.mjs'], {
   env: {
-    ...process.env, PORT: String(PORT), AI_BASE_URL: `http://127.0.0.1:${MOCK}/v1`, AI_API_KEY: 'mock-e2e', ALLOW_PRIVATE_BASE_URL: '1',
+    ...process.env, PORT: String(PORT), AI_BASE_URL: mocks.aiBaseUrl, AI_API_KEY: 'mock-e2e', ALLOW_PRIVATE_BASE_URL: '1',
     // 词典也指向本地 mock：e2e 不该依赖外网 —— 对方一抖动就红一片，还平白给人家刷请求
-    DICT_PROVIDER: 'youdao-web', DICT_BASE_URL: `http://127.0.0.1:${DICT_MOCK}`,
+    DICT_PROVIDER: 'youdao-web', DICT_BASE_URL: mocks.dictBaseUrl,
   },
   stdio: 'ignore',
 });
@@ -166,6 +102,22 @@ try {
   ok('词典原文照登（音标/释义/大纲标注）',
     dn.rows.some((r) => /^英/.test(r)) && dn.rows.some((r) => /n\./.test(r) && /物体/.test(r)) && dn.rows.some((r) => /大纲/.test(r) && /CET6/.test(r)),
     dn.rows.slice(0, 3).join(' | '));
+
+  /* ---------- ①b 追问：看完卡片再问一句（复用任务轮询，答案是纯文本） ---------- */
+  {
+    const hasAsk = (await page.locator('.ask-section').count()) === 1;
+    ok('卡片上有追问输入框', hasAsk);
+    if (hasAsk) {
+      await page.locator('.ask-input').fill('和 oppose 怎么选？');
+      await page.locator('.ask-row .primary-btn').click();
+      await page.waitForSelector('.ask-item .ask-a', { timeout: 40000 });
+      const ans = await page.evaluate(() => document.querySelector('.ask-item .ask-a')?.textContent.trim() || '');
+      ok('追问拿到纯文本回答（不是 JSON、没有开场白）',
+        ans.length > 5 && !ans.trim().startsWith('{') && !/^(好的|当然)[，,]/.test(ans), ans.slice(0, 50));
+      const stored = await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('vb-followups') || '{}')).length);
+      ok('追问留档在本机（按词条 id）', stored === 1, `${stored} 个词条有问答`);
+    }
+  }
 
   /* ---------- 加入单词本 ---------- */
   // 用 .primary-btn 限定：保存栏里现在还多了「导出 PDF」，选择器太宽会撞上 Playwright 的严格模式
@@ -318,6 +270,12 @@ try {
   const hints = await page.evaluate(() => [...document.querySelectorAll('.grade-bar .ghost-btn')].map((b) => b.textContent.trim()));
   ok('三档评分按钮带"下次几天后"预告', hints.length === 3 && hints.every((h) => /再见/.test(h)), hints.join(' / '));
   await page.locator('.grade-bar .ghost-btn').nth(2).click();   // 简单
+  // 一轮走完停在「本轮完成」而不是直接弹回搜索页：这里要放"用拼写再过一遍"这个新入口
+  await page.waitForSelector('.review-done-line', { timeout: 8000 });
+  ok('一轮走完停在「本轮完成」并给出拼写加练入口',
+    (await page.locator('.review-done-actions .primary-btn').count()) === 1,
+    (await page.locator('.review-done-line').innerText()).replace(/\s+/g, ' '));
+  await page.locator('.review-done-actions .ghost-btn').click();   // 回到查词
   await page.waitForSelector('.entry-card, .start-guide, .search-bar', { timeout: 8000 });
   const afterReview = await page.evaluate(() => ({
     schedule: JSON.parse(localStorage.getItem('vb-schedule') || '{}'),
@@ -501,8 +459,7 @@ try {
 } finally {
   await browser.close();
   server.kill();
-  mock.close();
-  dictMock.close();
+  await mocks.close();
 }
 
 console.log('\n' + '='.repeat(62));

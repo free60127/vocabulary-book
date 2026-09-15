@@ -7,7 +7,7 @@
  * 跑法：node server/jobstale.test.mjs
  */
 import { JOB_STALE_BY_KIND, JOB_STALE_MS, staleMsFor } from './job-stale.mjs';
-import { TIMEOUT_LOOKUP_MS, TIMEOUT_QUIZ_MS } from '../src/constants.js';
+import { TIMEOUT_FOLLOWUP_MS, TIMEOUT_LOOKUP_MS, TIMEOUT_QUIZ_MS } from '../src/constants.js';
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -19,7 +19,7 @@ const min = (ms) => `${ms / 60000} 分钟`;
 console.log('=== 僵尸任务阈值一致性测试 ===\n');
 
 /** 每个 kind 对应的前端等待上限 —— 服务端必须先判死 */
-const FRONTEND = { lookup: TIMEOUT_LOOKUP_MS, quiz: TIMEOUT_QUIZ_MS };
+const FRONTEND = { lookup: TIMEOUT_LOOKUP_MS, quiz: TIMEOUT_QUIZ_MS, followup: TIMEOUT_FOLLOWUP_MS };
 
 for (const [kind, frontendMs] of Object.entries(FRONTEND)) {
   const serverMs = JOB_STALE_BY_KIND[kind];

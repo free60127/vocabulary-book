@@ -7,10 +7,13 @@
  * 跑法：node test/review.test.mjs
  */
 import {
-  EASE_MAX, EASE_MIN, GRADES, INTERVAL_MAX, addStudyDay, dayKey, dueEntries, dueLabel,
-  gradeHint, mergeDays, mergeSchedules, newSchedule, nextDueAt, normalizeSchedule,
-  scheduleOf, sm2Review, summarizeStreak,
+  EASE_MAX, EASE_MIN, GRADES, INTERVAL_MAX, addStudyDay, addWrong, buildReviewQueue, buildWrongQueue,
+  checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, killedSet, mergeDays,
+  mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
+  spellHint, summarizeStreak, wrongList,
 } from '../src/review.js';
+import { sanitizeFollowup } from '../server/resultShape.mjs';
+import { FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage } from '../server/prompt.mjs';
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -136,5 +139,135 @@ console.log('=== 复习排期测试 ===\n');
 
 console.log('\n' + '='.repeat(62));
 const failed = results.filter((r) => !r.ok);
+
+/* ==========================================================================
+   复习队列（本子 + 收藏夹 + 斩掉）：这三条规则直接决定"今天要背什么"，
+   错一条用户就会看到"收藏的词永远不出现"或者"斩掉的词又回来了"。
+   ========================================================================== */
+{
+  const now = T0;
+  const E = (id, head, createdAt = T0 - 10 * DAY) => ({ id, head, kind: 'word', brief: head + ' 的释义', createdAt });
+  const F = (head, at = T0 - 5 * DAY) => ({ id: 'fav-' + head, head, brief: head + ' 的释义', at });
+  const sched = (id, due) => ({ [id]: { ease: 2.5, interval: 1, due, reps: 1, lapses: 0, lastReviewed: T0 - DAY, lastGrade: 'normal' } });
+
+  /* —— 收藏夹进复习队列 —— */
+  const q1 = buildReviewQueue({
+    entries: [E('wb-1', 'object')], favorites: [F('oppose')],
+    schedule: { ...sched('wb-1', T0 - 1000), ...sched('fav-oppose', T0 - 500) }, killed: {}, revived: {}, now,
+  });
+  check('收藏夹里到期的词也进复习队列', q1.length === 2 && q1.some((x) => x.kind === 'favorite' && x.head === 'oppose'),
+    JSON.stringify(q1.map((x) => x.head + ':' + x.kind)));
+  check('队列按"拖得最久"排序', q1[0].head === 'object', q1.map((x) => x.head).join(','));
+
+  /* —— 同一个词不重复出现 —— */
+  const q2 = buildReviewQueue({
+    entries: [E('wb-1', 'object')], favorites: [F('Object')],
+    schedule: { ...sched('wb-1', T0 - 1000), ...sched('fav-object', T0 - 1000) }, killed: {}, revived: {}, now,
+  });
+  check('已收进单词本的词不会又从收藏夹进一次（大小写无关）', q2.length === 1, JSON.stringify(q2.map((x) => x.head)));
+
+  /* —— 斩掉 —— */
+  const q3 = buildReviewQueue({
+    entries: [E('wb-1', 'object'), E('wb-2', 'banana')], favorites: [F('oppose')],
+    schedule: { ...sched('wb-1', T0 - 1000), ...sched('wb-2', T0 - 1000), ...sched('fav-oppose', T0 - 1000) },
+    killed: { object: T0, oppose: T0 }, revived: {}, now,
+  });
+  check('斩掉的词条不进队列', !q3.some((x) => x.head === 'object'), JSON.stringify(q3.map((x) => x.head)));
+  check('斩掉的收藏同样不进队列', !q3.some((x) => x.head === 'oppose'));
+  check('没斩掉的照常进', q3.some((x) => x.head === 'banana'));
+
+  /* —— 斩掉 / 收回按"谁更晚"决胜负 —— */
+  check('斩掉之后没收回 → 仍在斩掉集合里', killedSet({ object: 100 }, {}).has('object'));
+  check('收回更晚 → 不再是斩掉状态', !killedSet({ object: 100 }, { object: 200 }).has('object'));
+  check('又斩一次更晚 → 又进斩掉集合', killedSet({ object: 300 }, { object: 200 }).has('object'));
+  const q4 = buildReviewQueue({
+    entries: [E('wb-1', 'object')], favorites: [],
+    schedule: sched('wb-1', T0 - 1000), killed: { object: 100 }, revived: { object: 200 }, now,
+  });
+  check('收回之后立刻回到队列（不用等下次同步）', q4.length === 1);
+
+  /* —— 收藏项没有完整词条也要能复习 —— */
+  const q5 = buildReviewQueue({
+    entries: [], favorites: [{ id: 'fav-x', head: 'incumbent', brief: '在职的', at: T0 - DAY }],
+    schedule: {}, killed: {}, revived: {}, now,
+  });
+  check('没有排期的收藏项当天就能复习（新收藏立刻进队列）', q5.length === 1 && q5[0].kind === 'favorite');
+}
+
+/* ==========================================================================
+   拼写判定与提示：判错 = 用户明明拼对了却过不去；判太松 = 拼一半也算对
+   ========================================================================== */
+{
+  check('拼写：完全正确', checkSpelling('object', 'object'));
+  check('拼写：忽略大小写与首尾空格', checkSpelling('  Object ', 'object'));
+  check('拼写：空输入不算对', checkSpelling('', 'object') === false);
+  check('拼写：词条带搭配时允许只打主词', checkSpelling('object', 'object to sth'));
+  check('拼写：短语必须打全（打一个 no 不算）', checkSpelling('no', 'no sooner ... than') === false);
+  check('拼写：短语打全了就算对', checkSpelling('pull off', 'pull off'));
+  check('拼写：打错就是错', checkSpelling('objekt', 'object') === false);
+  check('提示 1 级只给首字母', spellHint('incumbent', 1).startsWith('i ') && !spellHint('incumbent', 1).includes('ncumbent'));
+  check('提示 2 级给一半', spellHint('incumbent', 2).startsWith('incum '));
+  check('提示 3 级给整个答案', spellHint('incumbent', 3) === 'incumbent');
+  check('提示对空词头安全', spellHint('', 2) === '' && spellHint(null, 1) === '');
+}
+
+
+/* ==========================================================================
+   错词本：进本 / 出本 / 合并 / 只练错词
+   规则错一条的后果：进不去（"我明明答错了"）或出不来（错词本越攒越多没人看）。
+   ========================================================================== */
+{
+  const now = T0;
+  let w = {};
+  w = addWrong(w, 'Object', 'forgot', { brief: '物体' }, 1000);
+  check('答错进本并记下次数与原因', w.object.count === 1 && w.object.reason === 'forgot', JSON.stringify(w.object));
+  w = addWrong(w, 'object', 'spell', {}, 2000);
+  check('同一个词再错 → 次数累加、原因取最近一次', w.object.count === 2 && w.object.reason === 'spell', JSON.stringify(w.object));
+  check('词头大小写归一（不会出现两条 object）', Object.keys(w).length === 1);
+  check('第一次错的时间被保留（用来显示"错了两周"）', w.object.firstAt === 1000 && w.object.at === 2000);
+
+  const listed = wrongList(w, [{ id: 'wb-1', head: 'object', brief: '物体；反对', phonetic: '/ˈɒbdʒɪkt/' }], []);
+  check('清单补上本子里的释义与音标', listed[0].brief === '物体；反对' && listed[0].phonetic === '/ˈɒbdʒɪkt/', JSON.stringify(listed[0]));
+  check('清单标出"还在不在本子里"', listed[0].inBook === true && listed[0].exists === true);
+
+  const ghost = wrongList({ vanished: { head: 'vanished', count: 3, at: 5 } }, [], []);
+  check('词条被删掉也还在清单里（用户得看得见、清得掉）', ghost.length === 1 && ghost[0].exists === false && ghost[0].brief === '');
+
+  check('答对出本', Object.keys(clearWrong(w, 'OBJECT')).length === 0);
+  check('出本对不存在的词安全', Object.keys(clearWrong(w, 'nope')).length === 1);
+  check('出本对脏输入安全', Object.keys(clearWrong(null, 'x') || {}).length === 0);
+
+  const merged = mergeWrong({ a: { count: 3, at: 10 }, b: { count: 1, at: 99 } }, { a: { count: 5, at: 5 }, c: { count: 2, at: 20 } });
+  check('跨设备合并取"次数更多"的那份，不累加', merged.a.count === 5 && merged.c.count === 2, JSON.stringify(merged));
+  check('次数相同时取更近的一次', mergeWrong({ a: { count: 2, at: 10 } }, { a: { count: 2, at: 30 } }).a.at === 30);
+
+  const queue = buildWrongQueue({
+    wrong: { object: { head: 'object', count: 2, at: 5 }, ghost: { head: 'ghost', count: 1, at: 6 } },
+    entries: [{ id: 'wb-1', head: 'object', createdAt: 1 }],
+    favorites: [{ id: 'fav-x', head: 'faved', brief: '收藏的' }],
+    schedule: {}, killed: {}, revived: {}, now,
+  });
+  check('只练错词：本子里有的用完整词条', queue.some((x) => x.kind === 'entry' && x.head === 'object'));
+  check('只练错词：只剩记录的也能练（用词头那一行）', queue.some((x) => x.kind === 'wrong' && x.head === 'ghost'));
+  check('不在错词本里的词不会被带进来', !queue.some((x) => x.head === 'faved'));
+  check('斩掉的错词不再出现', buildWrongQueue({
+    wrong: { object: { head: 'object', count: 1, at: 5 } },
+    entries: [{ id: 'wb-1', head: 'object' }], favorites: [], schedule: {}, killed: { object: 9 }, revived: {}, now,
+  }).length === 0);
+}
+
+/* ---------- 追问回答的清洗（服务端） ---------- */
+{
+  check('追问：代码块围栏被剥掉', sanitizeFollowup('```json\n{"answer":"正文"}\n```') === '正文');
+  check('追问：开场白被剥掉', sanitizeFollowup('好的，我来回答：object 是名词。') === 'object 是名词。');
+  check('追问：对象形态取字段', sanitizeFollowup({ text: '字段回答' }) === '字段回答');
+  check('追问：空输入返回空串（前端据此报"没拿到回答"）', sanitizeFollowup(null) === '' && sanitizeFollowup('   ') === '');
+  check('追问：超长回答被截断（不让一段话撑爆界面）', sanitizeFollowup('x'.repeat(9000)).length === 4000);
+  check('追问提示词：要求直接回答、不许重讲整张卡', /直接回答/.test(FOLLOWUP_SYSTEM_PROMPT) && /不要重新讲一遍/.test(FOLLOWUP_SYSTEM_PROMPT));
+  const msg = buildFollowupMessage({ head: 'object', brief: '物体', pos: '名词', question: '怎么选？', context: 'object to sth' });
+  check('追问消息带上词、释义、上下文与问题',
+    msg.includes('object') && msg.includes('物体') && msg.includes('object to sth') && msg.includes('怎么选？'), msg.slice(0, 40));
+}
+
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

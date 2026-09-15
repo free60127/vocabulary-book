@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, BookPlus, Star, Trash2, X } from 'lucide-react';
+import { useEscape } from '../../hooks/useEscape.js';
 
 /**
  * 收藏夹：攒下"在别人的近义词里看到、想回头细看"的词。
@@ -11,6 +12,7 @@ import { ArrowRight, BookPlus, Star, Trash2, X } from 'lucide-react';
  */
 export default function FavoritesModal({ favorites, books, busy, onClose, onRemove, onAddToBook, onLookup }) {
   const [bookId, setBookId] = useState(books[0]?.id || '');
+  useEscape(onClose);
 
   return (
     <div className="modal-mask" onClick={onClose}>

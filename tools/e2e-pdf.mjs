@@ -11,7 +11,9 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { chromium } from 'file:///D:/AI/66666-main/tools/shotter/node_modules/playwright/index.mjs';
+import { requirePlaywright } from './playwright.mjs';
+
+const { chromium } = await requirePlaywright();
 const PORT = 8817, MOCK = 9817;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const entry = (head, extra = {}) => ({
