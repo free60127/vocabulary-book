@@ -102,6 +102,44 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
         const q = (/【学生的问题】([^\n\\]+)/.exec(b) || [])[1] || '';
         return send(200, { choices: [{ message: { content: '好的，我来回答：object 作名词是"物体"，作动词要接 to —— object to sth。' + (q ? '（问题：' + q.slice(0, 20) + '）' : '') } }] });
       }
+      // 造句：出题（翻译模式的中文句子）与批改（三维评分）
+      if (/造句|翻译题/.test(b) && /items/.test(b)) {
+        // 只认【词条】那一段里的 "1. head｜词性｜释义"：
+        // 系统提示词里也有编号行，不圈定范围就会把它们当成词头（第一版就这么翻车的）
+        const seg = (b.split('【词条】')[1] || '').split('【')[0];
+        const heads = [];
+        for (const line of seg.split('\\n')) {
+          const hit = /^\d+\.\s*([^｜]+)/.exec(line.trim());
+          if (hit && hit[1]) heads.push(hit[1].trim());
+        }
+        const list = heads.length ? heads : ['object', 'oppose', 'banana'];
+        return send(200, { choices: [{ message: { content: JSON.stringify({
+          title: '造句练习 · ' + list.length + ' 题',
+          items: list.map((h) => ({ head: h, cn: `请把这句话译成英文：我想用 ${h} 说一件事。`, tip: '注意它该用什么词性' })),
+        }) } }] });
+      }
+      if (/批改|造句练习/.test(b) && /score/.test(b)) {
+        // 用没用到目标词决定分数高低：这样"进错词本"那条分支也测得到。
+        // 请求体是 JSON：真实换行在里面是「反斜杠 + n」，所以按 '\\n' 切分再取值。
+        const field = (label) => {
+          const i = b.indexOf('【' + label + '】');
+          if (i < 0) return '';
+          return b.slice(i + label.length + 2).split('\\n')[0].replace(/[（(].*$/, '').trim();
+        };
+        const head = field('目标词') || 'object';
+        const sentence = field('学生写的句子');
+        // 词头里可能带括号/空格/撇号 —— 正则里只保留字母，免得把测试搞崩（真实链路是模型判断，不靠正则）
+        const probe = (head.split(/[\s（(]/)[0] || '').replace(/[^A-Za-z'-]/g, '');
+        const used = probe ? new RegExp(probe, 'i').test(sentence) : false;
+        return send(200, { choices: [{ message: { content: JSON.stringify({
+          score: used ? 88 : 30,
+          usesTarget: used,
+          verdict: used ? '用词准确，语境也自然。' : '这句里没有出现目标词。',
+          problems: used ? [] : [{ kind: 'word', issue: '句子里没有用上 ' + head, fix: '把 ' + head + ' 放进句子里再试' }],
+          suggestion: used ? sentence : 'I want to use ' + head + ' in a sentence.',
+          corrected: used ? sentence : 'I want to use ' + head + ' in a sentence.',
+        }) } }] });
+      }
       if (term === '__error__') return send(500, { error: { message: 'mock upstream exploded' } });
       if (term === '__garbage__') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
       const payload = isQuiz ? QUIZ : (term === '__huge__' ? hugeEntry(term) : entryFor(term));

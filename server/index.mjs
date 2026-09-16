@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as dnsLookup } from 'node:dns';
 
-import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
-import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, attachDict } from './resultShape.mjs';
+import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
@@ -497,6 +497,45 @@ async function runFollowupJob(jobId, { head, brief, pos, question, context, leve
   saveJob(job);
 }
 
+/**
+ * 造句练习：一个入口两种活 —— 出题（翻译模式）与批改（两种模式共用）。
+ *
+ * 为什么合成一个 kind：两者都是一次短调用、同一个入口、同一套超时；
+ * 分成两个 kind 只会让任务表、限流、僵尸阈值三处都要各写一遍。
+ */
+async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn, sentence, level, baseUrl, model, apiKey }) {
+  const job = await findJob(jobId);
+  if (!job) return;
+  job.status = 'running';
+  job.updatedAt = Date.now();
+  saveJob(job);
+
+  if (mode === 'make') {
+    const raw = await callLLM({
+      baseUrl, model, apiKey,
+      system: SENTENCE_MAKE_PROMPT,
+      user: buildSentenceMakeMessage({ points: points.slice(0, count), level }),
+      maxTokens: 3000,
+    });
+    const parsed = sanitizeSentenceTasks(parseJsonLoose(raw));
+    if (!parsed.items.length) throw new Error('模型没有给出题目，请重试');
+    job.data = parsed;
+  } else {
+    const raw = await callLLM({
+      baseUrl, model, apiKey,
+      system: SENTENCE_GRADE_PROMPT,
+      user: buildSentenceGradeMessage({ head, brief, pos, mode: mode === 'translate' ? 'translate' : 'free', cn, sentence, level }),
+      maxTokens: 2000,
+    });
+    const grade = sanitizeSentenceGrade(parseJsonLoose(raw));
+    if (!grade.verdict && !grade.score) throw new Error('模型没有给出批改结果，请重试');
+    job.data = { head, mode, sentence, ...grade };
+  }
+  job.status = 'done';
+  job.updatedAt = Date.now();
+  saveJob(job);
+}
+
 /* ================= HTTP 层 ================= */
 const DIST = path.join(ROOT, 'dist');
 const MAX_BODY_BYTES = 2 * 1024 * 1024;   // 这个产品只传文本，2MB 足够
@@ -798,7 +837,60 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, jobId, status: 'pending' });
     }
 
-    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup)\/([A-Za-z0-9-]{8,64})$/);
+    /* ---------- 造句练习（出题 / 批改） ---------- */
+    if (p === '/api/sentence' && req.method === 'POST') {
+      const body = await readBody(req, 256 * 1024);
+      const mode = body.mode === 'make' ? 'make' : 'grade';
+      if (rateLimited(req, mode === 'grade' ? 'grade' : undefined)) {
+        return json(res, 429, { error: mode === 'grade' ? '批改得太快了，缓一缓' : '请求过于频繁，请稍后再试' });
+      }
+      const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
+      if (ep.error) return json(res, 400, { error: ep.error });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
+
+      if (mode === 'make') {
+        const points = (Array.isArray(body.points) ? body.points : [])
+          .map((x) => String(x || '').trim()).filter(Boolean).slice(0, 30);
+        if (!points.length) return json(res, 400, { error: '还没有词条可以出题 —— 先查几个词' });
+        const count = Math.max(1, Math.min(20, Number(body.count) || 5));
+        const jobId = randomUUID();
+        saveJob({ jobId, kind: 'sentence', title: '造句练习 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
+        safeRun('sentence', jobId, () => runSentenceJob(jobId, {
+          mode: 'make', points, count, level: normalizeLevel(body.level),
+          baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
+        }));
+        return json(res, 200, { ok: true, jobId, status: 'pending' });
+      }
+
+      const head = String(body.head || '').trim().slice(0, 200);
+      const sentence = String(body.sentence || '').trim().slice(0, 1000);
+      if (!head) return json(res, 400, { error: '缺少要练习的词' });
+      if (!sentence) return json(res, 400, { error: '先写下你的句子再提交' });
+      const jobId = randomUUID();
+      saveJob({ jobId, kind: 'sentence', title: head + ' · 批改', status: 'pending', createdAt: Date.now(), data: null, error: null });
+      safeRun('sentence', jobId, () => runSentenceJob(jobId, {
+        mode: 'grade', head,
+        brief: String(body.brief || '').slice(0, 600),
+        pos: String(body.pos || '').slice(0, 60),
+        cn: String(body.cn || '').slice(0, 600),
+        sentence,
+        level: normalizeLevel(body.level),
+        baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
+      }));
+      return json(res, 200, { ok: true, jobId, status: 'pending' });
+    }
+
+    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup|sentence)\/([A-Za-z0-9-]{8,64})$/);
     if (jobMatch && req.method === 'GET') {
       const job = await findJob(jobMatch[2]);
       if (!job || job.kind !== jobMatch[1]) return json(res, 404, { error: '任务不存在或已过期，请重新发起' });

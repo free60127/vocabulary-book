@@ -821,6 +821,61 @@ async function runProfile(browser, p) {
       await page.waitForTimeout(300);
     }
 
+    at('造句练习');
+    /* ---------- 6b. 造句：两种模式 + AI 批改（用词/语法/语境） ---------- */
+    {
+      // 入口：桌面在顶栏，手机在「更多」里（复用现成的 clickTopAction）
+      await clickTopAction(/造句/);
+      await page.waitForSelector('.sentence-setup', { timeout: 8000 });
+      const modes = await page.evaluate(() => [...document.querySelectorAll('.mode-card strong')].map((x) => x.textContent.trim()));
+      check(p.id, '造句有两种模式：自由 / 翻译', modes.join('/') === '自由造句/翻译造句', modes.join('/'));
+      await auditShot('sentence-setup');
+
+      // 选翻译模式（要给中文句子）
+      await page.locator('.mode-card', { hasText: '翻译造句' }).click();
+      await page.locator('.sentence-setup .primary-btn').click();
+      await page.waitForSelector('.sentence-pane', { timeout: 60000 });
+      await page.waitForFunction(() => document.querySelectorAll('.sentence-word strong').length === 1, null, { timeout: 20000 });
+      const task = await page.evaluate(() => ({
+        head: document.querySelector('.sentence-word strong')?.textContent.trim() || '',
+        cn: document.querySelector('.sentence-cn p')?.textContent.trim() || '',
+        mode: document.querySelector('.sentence-pane h2')?.textContent.replace(/\s+/g, ' ').trim() || '',
+      }));
+      check(p.id, '翻译模式给出了中文句子', Boolean(task.cn) && /翻译造句/.test(task.mode), JSON.stringify(task).slice(0, 90));
+
+      // ① 用上目标词 → 应该得分高、没有"没用上"标记
+      await page.locator('.sentence-input').fill('I really want to use ' + task.head + ' in a sentence.');
+      await page.locator('.sentence-actions .primary-btn').click();
+      await page.waitForSelector('.sentence-grade', { timeout: 60000 });
+      const good = await page.evaluate(() => ({
+        score: Number((document.querySelector('.grade-score b') || {}).textContent || 0),
+        flag: Boolean(document.querySelector('.grade-flag')),
+        verdict: (document.querySelector('.grade-verdict p') || {}).textContent || '',
+      }));
+      check(p.id, '用上目标词 → 得分高且没有"没用上"标记', good.score >= 60 && !good.flag, JSON.stringify(good).slice(0, 90));
+      await auditShot('sentence-graded');
+
+      // ② 下一个词：故意不用目标词 → 应被判"没用上"、分数低、并进错词本
+      await page.locator('.sentence-grade .primary-btn').click();
+      await page.waitForTimeout(500);
+      const head2 = await page.evaluate(() => document.querySelector('.sentence-word strong')?.textContent.trim() || '');
+      await page.locator('.sentence-input').fill('This sentence has nothing to do with it.');
+      await page.locator('.sentence-actions .primary-btn').click();
+      await page.waitForSelector('.sentence-grade', { timeout: 60000 });
+      const bad = await page.evaluate(() => ({
+        score: Number((document.querySelector('.grade-score b') || {}).textContent || 0),
+        flag: (document.querySelector('.grade-flag') || {}).textContent || '',
+        problems: [...document.querySelectorAll('.grade-problem')].map((x) => x.textContent.replace(/\s+/g, ' ').trim()),
+        wrong: JSON.parse(localStorage.getItem('vb-wrong') || '{}'),
+      }));
+      check(p.id, '没用上目标词 → 明确标出来且分数低', bad.score < 60 && /没有用上/.test(bad.flag), JSON.stringify({ score: bad.score, flag: bad.flag }).slice(0, 80));
+      check(p.id, '批改给出具体问题（不是一句"注意语法"）', bad.problems.length > 0 && bad.problems[0].length > 6, bad.problems[0] || '');
+      check(p.id, '造句没写好会自动进错词本', Object.keys(bad.wrong).some((k) => k.includes(head2.toLowerCase())), Object.keys(bad.wrong).join(','));
+      await page.locator('.sentence-pane .ghost-btn', { hasText: '退出练习' }).click();
+      await page.waitForTimeout(400);
+      check(p.id, '退出造句回到查词界面', (await page.locator('.search-bar').count()) === 1);
+    }
+
     at('自测题');
     /* ---------- 6. 自测题 ---------- */
     await clickTopAction(/自测题/);

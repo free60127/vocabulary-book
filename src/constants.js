@@ -6,6 +6,8 @@ export const POLL_LOOKUP_MS = 1500;
 export const POLL_QUIZ_MS = 2000;
 /** 追问：短任务，1.2 秒问一次 */
 export const POLL_FOLLOWUP_MS = 1200;
+/** 造句练习：同样短任务 */
+export const POLL_SENTENCE_MS = 1200;
 
 /** 前端等待上限。**必须大于**服务端判僵尸的阈值（server/job-stale.mjs），
  *  否则用户会先吃到"超时"、而服务端还认为任务在跑。 */
@@ -13,6 +15,8 @@ export const TIMEOUT_LOOKUP_MS = 5 * 60 * 1000;
 export const TIMEOUT_QUIZ_MS = 5 * 60 * 1000;
 /** 追问比查词短得多（300 字以内），等 5 分钟没有意义；2 分钟足够，服务端 90 秒判僵尸 */
 export const TIMEOUT_FOLLOWUP_MS = 2 * 60 * 1000;
+/** 造句的出题与批改：各是一次短调用，3 分钟足够（服务端 2 分钟判僵尸） */
+export const TIMEOUT_SENTENCE_MS = 3 * 60 * 1000;
 
 /** 弱网容错：连续这么多次取不到任务才判定网络断了 */
 export const POLL_MAX_FAILURES = 10;

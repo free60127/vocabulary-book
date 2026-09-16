@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  BookMarked, Cloud, Flame, LogIn, MoreVertical, PanelLeftClose, PanelLeftOpen, Settings, Skull, Sparkles, Star,
+  BookMarked, Cloud, Flame, LogIn, MoreVertical, PanelLeftClose, PanelLeftOpen, PenLine, Settings, Skull,
+  Sparkles, Star,
 } from 'lucide-react';
 
 /**
@@ -13,7 +14,7 @@ import {
  */
 export default function Topbar({
   sidebarOpen, onToggleSidebar, dueCount, onStartReview, nextDue,
-  onOpenQuiz, quizDisabled, account, onOpenAuth,
+  onOpenQuiz, quizDisabled, onOpenSentence, sentenceDisabled, account, onOpenAuth,
   status, hasKey, stats, streak, syncCode, lastSyncAt,
   onOpenSettings, onOpenBackup, onOpenFavorites, favoritesCount, onOpenKilled, killedCount,
 }) {
@@ -57,6 +58,10 @@ export default function Topbar({
       <button className="ghost-btn desktop-only" onClick={onOpenQuiz} disabled={quizDisabled}>
         <Sparkles size={15} />自测题
       </button>
+      <button className="ghost-btn desktop-only" onClick={onOpenSentence} disabled={sentenceDisabled}
+        title="从单词本和收藏夹抽词，写句子让 AI 批改">
+        <PenLine size={15} />造句
+      </button>
       {account.email
         ? <button className="ghost-btn desktop-only" onClick={onOpenAuth} title={account.email}><LogIn size={15} />{account.email.split('@')[0]}</button>
         : <button className="ghost-btn desktop-only" onClick={onOpenAuth}><LogIn size={15} />登录</button>}
@@ -79,6 +84,7 @@ export default function Topbar({
         {menuOpen ? (
           <div className="more-menu" role="menu">
             <button role="menuitem" onClick={run(onOpenQuiz)} disabled={quizDisabled}><Sparkles size={15} />自测题</button>
+            <button role="menuitem" onClick={run(onOpenSentence)} disabled={sentenceDisabled}><PenLine size={15} />造句练习</button>
             <button role="menuitem" onClick={run(onOpenFavorites)}><Star size={15} />收藏夹{favoritesCount ? `（${favoritesCount}）` : ''}</button>
             {killedCount ? (
               <button role="menuitem" onClick={run(onOpenKilled)}><Skull size={15} />已斩掉的词<span className="menu-count">{killedCount}</span></button>

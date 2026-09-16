@@ -275,3 +275,58 @@ export function sanitizeFollowup(raw) {
   }
   return text.slice(0, 4000).trim();
 }
+
+/* ---------- 造句练习：出题与批改的形状清洗 ---------- */
+
+/** 翻译模式的题目：每题必须有词头与中文句子，缺一不可（缺了没法练） */
+export function sanitizeSentenceTasks(raw) {
+  const src = isPlainObject(raw) ? raw : {};
+  const items = (Array.isArray(src.items) ? src.items : [])
+    .filter(isPlainObject).slice(0, 30)
+    .map((it) => {
+      const head = boundedString(it.head, 200).trim();
+      const cn = boundedString(it.cn, 600).trim();
+      if (!head || !cn) return null;
+      return { head, cn, tip: boundedString(it.tip, 300).trim() };
+    })
+    .filter(Boolean);
+  return { title: boundedString(src.title, 200) || ('造句练习 · ' + items.length + ' 题'), items };
+}
+
+const SENTENCE_KINDS = ['word', 'grammar', 'context'];
+
+/**
+ * 批改结果。
+ *
+ * 分数量纲必须收口：模型偶尔会回 8.5（十分制）或 1（百分制小数），
+ * 直接显示会变成"8.5 分" —— 用户以为自己做得很差。统一按 0~100 归一。
+ */
+export function sanitizeSentenceGrade(raw) {
+  const src = isPlainObject(raw) ? raw : {};
+  let score = Number(src.score);
+  if (!Number.isFinite(score)) score = 0;
+  if (score > 0 && score <= 1) score *= 100;
+  else if (score > 1 && score <= 10) score *= 10;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const problems = (Array.isArray(src.problems) ? src.problems : [])
+    .filter(isPlainObject).slice(0, 8)
+    .map((p) => {
+      const issue = boundedString(p.issue, 400).trim();
+      if (!issue) return null;
+      return {
+        kind: SENTENCE_KINDS.includes(p.kind) ? p.kind : 'context',
+        issue,
+        fix: boundedString(p.fix, 400).trim(),
+      };
+    })
+    .filter(Boolean);
+  const usesTarget = src.usesTarget === undefined ? score > 0 : Boolean(src.usesTarget);
+  return {
+    score: usesTarget ? score : Math.min(score, 40),
+    usesTarget,
+    verdict: boundedString(src.verdict, 600).trim(),
+    problems,
+    suggestion: boundedString(src.suggestion, 800).trim(),
+    corrected: boundedString(src.corrected, 800).trim(),
+  };
+}

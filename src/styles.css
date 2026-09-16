@@ -1035,3 +1035,74 @@ body.drawer-open { overflow: hidden; }
   .back-to-top { right: 12px; bottom: calc(78px + env(safe-area-inset-bottom, 0px)); }
 }
 @media print { .back-to-top { display: none !important; } }
+
+/* ---------- 造句练习 ----------
+   产出型练习：自由造句 / 翻译造句，AI 按"用词 / 语法 / 语境"三维批改。
+   批改结果要一眼看得出"哪条是问题、怎么改"，所以问题按维度分色、结论与改动分行。 */
+.sentence-setup, .sentence-pane { display: flex; flex-direction: column; gap: 12px; }
+.mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode-card {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text); cursor: pointer;
+}
+.mode-card:hover { border-color: var(--brand); }
+.mode-card.active { border-color: var(--brand); background: var(--info-bg); box-shadow: inset 0 0 0 1px var(--brand); }
+.mode-card strong { font-size: 14px; }
+@media (max-width: 560px) { .mode-picker { grid-template-columns: 1fr; } }
+
+.sentence-task { display: flex; flex-direction: column; gap: 8px; }
+.sentence-word { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sentence-word strong { font-size: 26px; letter-spacing: -.01em; }
+.sentence-meaning { margin: 0; }
+.sentence-cn {
+  border-left: 3px solid var(--brand); background: var(--info-bg);
+  padding: 10px 12px; border-radius: 0 10px 10px 0;
+}
+.sentence-cn-label {
+  display: inline-block; font-size: 11px; letter-spacing: .06em; color: var(--brand);
+  text-transform: uppercase; margin-bottom: 2px;
+}
+.sentence-cn p { margin: 2px 0 0; font-size: 15px; line-height: 1.7; }
+
+.sentence-input {
+  width: 100%; min-height: 84px; resize: vertical;
+  padding: 11px 13px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--fill-2); color: var(--text);
+  font-family: inherit; font-size: 15px; line-height: 1.7;
+}
+.sentence-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(45, 129, 215, .16); }
+.sentence-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sentence-actions .primary-btn { margin-left: auto; }
+
+/* 批改结果 */
+.sentence-grade { display: flex; flex-direction: column; gap: 10px; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--line); }
+.sentence-grade.tone-great { border-color: var(--ok-line); background: var(--ok-bg); }
+.sentence-grade.tone-good { border-color: var(--info-line); background: var(--info-bg); }
+.sentence-grade.tone-fair { border-color: var(--warn-line); background: var(--warn-bg); }
+.sentence-grade.tone-poor { border-color: var(--err-line); background: var(--err-bg); }
+.grade-head { display: flex; align-items: flex-start; gap: 14px; }
+.grade-score { display: flex; align-items: baseline; gap: 2px; flex: none; }
+.grade-score b { font-size: 34px; line-height: 1; }
+.grade-score span { font-size: 12px; color: var(--muted); }
+.grade-verdict { flex: 1; min-width: 0; }
+.grade-verdict p { margin: 0; line-height: 1.75; }
+.grade-flag {
+  display: inline-block; margin-bottom: 4px; padding: 1px 8px; border-radius: 999px;
+  font-size: 12px; background: var(--err-bg); color: var(--err-ink); border: 1px solid var(--err-line);
+}
+.grade-problems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.grade-problem { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; line-height: 1.7; font-size: 13.5px; }
+.problem-kind {
+  flex: none; padding: 1px 7px; border-radius: 6px; font-size: 11.5px;
+  background: var(--fill); color: var(--muted); border: 1px solid var(--line);
+}
+.grade-problem.kind-word .problem-kind { color: var(--purple); border-color: var(--purple); }
+.grade-problem.kind-grammar .problem-kind { color: var(--red); border-color: var(--red); }
+.grade-problem.kind-context .problem-kind { color: var(--blue); border-color: var(--blue); }
+.problem-fix { color: var(--muted); }
+.problem-fix::before { content: '→ '; }
+.grade-clean { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ok-ink); font-size: 13.5px; }
+.grade-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; border-top: 1px dashed var(--line); padding-top: 8px; }
+.grade-line p { margin: 0; flex: 1; min-width: 200px; line-height: 1.7; }
+.grade-label { flex: none; font-size: 11.5px; color: var(--muted); letter-spacing: .06em; }

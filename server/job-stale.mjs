@@ -16,6 +16,7 @@ export const JOB_STALE_BY_KIND = Object.freeze({
   lookup: 4 * 60 * 1000,   // 前端 TIMEOUT_LOOKUP_MS = 5 分钟
   quiz: 4 * 60 * 1000,     // 前端 TIMEOUT_QUIZ_MS   = 5 分钟
   followup: 90 * 1000,     // 前端 TIMEOUT_FOLLOWUP_MS = 2 分钟
+  sentence: 2 * 60 * 1000, // 前端 TIMEOUT_SENTENCE_MS = 3 分钟（出题/批改各一次调用）
 });
 
 /** 未知 kind 的兜底阈值 */

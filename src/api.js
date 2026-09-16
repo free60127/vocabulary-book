@@ -48,6 +48,10 @@ export const getQuizJob = (jobId) => api('/api/quiz/' + jobId, {}, TIMEOUT.fast)
 export const followup = (payload) => api('/api/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
 export const getFollowupJob = (jobId) => api('/api/followup/' + jobId, {}, TIMEOUT.fast);
 
+/* ---------- 造句练习（出题 / 批改） ---------- */
+export const sentencePractice = (payload) => api('/api/sentence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
+export const getSentenceJob = (jobId) => api('/api/sentence/' + jobId, {}, TIMEOUT.fast);
+
 /* ---------- 云同步 ---------- */
 export const createSyncCode = () => api('/api/sync/new', { method: 'POST' }, TIMEOUT.normal);
 export const pullCloudSync = (code) => api('/api/sync/' + code, {}, TIMEOUT.normal);

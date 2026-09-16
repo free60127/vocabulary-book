@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob } from './api.js'
+import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob, sentencePractice, getSentenceJob } from './api.js'
 import {
-  POLL_LOOKUP_MS, POLL_QUIZ_MS, POLL_FOLLOWUP_MS, TIMEOUT_LOOKUP_MS, TIMEOUT_QUIZ_MS,
-  TIMEOUT_FOLLOWUP_MS, POLL_MAX_FAILURES,
+  POLL_LOOKUP_MS, POLL_QUIZ_MS, POLL_FOLLOWUP_MS, POLL_SENTENCE_MS, TIMEOUT_LOOKUP_MS,
+  TIMEOUT_QUIZ_MS, TIMEOUT_FOLLOWUP_MS, TIMEOUT_SENTENCE_MS, POLL_MAX_FAILURES,
   TIP_LONG_MS, TIP_NORMAL_MS,
 } from './constants.js'
 import { submitAndPoll } from './hooks/pollJob.js'
@@ -37,6 +37,7 @@ import KilledModal from './components/modals/KilledModal.jsx'
 import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
 import BackToTop from './components/BackToTop.jsx'
+import SentencePane from './components/SentencePane.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -138,6 +139,14 @@ export default function App() {
   const [spellRun, setSpellRun] = useState(false)
   /** 这一轮是什么：due（今天的复习）/ today（今日加练）/ wrong（错词练习） */
   const [reviewKind, setReviewKind] = useState('due')
+  /* ---------- 造句练习 ---------- */
+  const [sentenceMode, setSentenceMode] = useState('free')   // free | translate
+  const [sentenceItems, setSentenceItems] = useState([])
+  const [sentenceIndex, setSentenceIndex] = useState(0)
+  const [sentenceGrade, setSentenceGrade] = useState(null)
+  const [sentenceBusy, setSentenceBusy] = useState(false)
+  const [sentenceGrading, setSentenceGrading] = useState(false)
+  const [sentenceError, setSentenceError] = useState('')
 
   const cloud = useCloud({ getLocal: () => local, applyMerged, flash })
   const {
@@ -652,6 +661,108 @@ export default function App() {
     if (n > 0) flash('这一轮复习完成，共 ' + n + ' 个词', TIP_LONG_MS)
   }
 
+  /* ---------- 造句练习 ----------
+   * 从单词本 + 收藏夹里抽词（斩掉的排除），两种模式共用一套批改。
+   * 抽词口径复用复习队列那套规则，所以"练什么"和"复习什么"是一致的。 */
+  const startSentence = async (mode) => {
+    const pool = [...new Map([...due, ...todayQueue].map((x) => [x.key, x])).values()]
+    const source = pool.length ? pool : entries.map((e) => ({ key: e.id, head: e.head, entry: e, kind: 'entry' }))
+    if (!source.length) { setSentenceError('还没有词可以练 —— 先查几个词，或在收藏夹里收几个'); setView('sentence'); return }
+    setSentenceError(''); setSentenceBusy(true); setSentenceGrade(null)
+    try {
+      // 一次抽 5 个：太少不像练习，太多一次批改等太久
+      const chosen = [...source].sort(() => Math.random() - 0.5).slice(0, 5)
+      const points = chosen.map((x) => {
+        const e = x.entry || {}
+        const f = x.favorite || {}
+        return [
+          x.head,
+          e.pos || f.pos || '',
+          (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || '',
+          (e.synonyms || []).slice(0, 2).map((s) => s.word + (s.diff ? '（' + s.diff + '）' : '')).join('；'),
+        ].filter(Boolean).join('｜')
+      })
+      const out = await submitAndPoll({
+        submit: () => sentencePractice({
+          mode: 'make', points, count: chosen.length, level,
+          baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey,
+        }),
+        fetchJob: getSentenceJob,
+        intervalMs: POLL_SENTENCE_MS,
+        timeoutMs: TIMEOUT_SENTENCE_MS,
+        maxFailures: POLL_MAX_FAILURES,
+        netError: '网络不稳定，没拿到题目，请重试',
+        timeoutError: '出题超时了，稍后再点一次「开始」即可',
+        isAlive: () => aliveRef.current,
+      })
+      if (out.aborted) return
+      const items = (out.data && out.data.items) || []
+      if (!items.length) throw new Error('模型没有给出题目，请重试')
+      const byHead = new Map(chosen.map((x) => [String(x.head).toLowerCase(), x]))
+      setSentenceItems(items.map((it) => {
+        const hit = byHead.get(String(it.head).toLowerCase()) || {}
+        const e = hit.entry || {}
+        const f = hit.favorite || {}
+        return {
+          ...it,
+          phonetic: e.phonetic || f.phonetic || '',
+          meaning: (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || '',
+          key: hit.key || it.head,
+          entry: hit.entry || null,
+        }
+      }))
+      setSentenceMode(mode || 'free')
+      setSentenceIndex(0)
+      setView('sentence')
+    } catch (e) {
+      setSentenceError(e.message || '出题失败')
+      setView('sentence')
+    } finally {
+      setSentenceBusy(false)
+    }
+  }
+
+  /** 提交批改：结果同时决定"进不进错词本"（与复习、拼写同一套出口） */
+  const gradeSentence = async (sentence) => {
+    const cur = sentenceItems[sentenceIndex]
+    if (!cur || !sentence || !String(sentence).trim()) return
+    setSentenceGrading(true); setSentenceError(''); setSentenceGrade(null)
+    try {
+      const out = await submitAndPoll({
+        submit: () => sentencePractice({
+          mode: 'grade',
+          head: cur.head,
+          brief: cur.meaning || '',
+          cn: sentenceMode === 'translate' ? cur.cn : '',
+          sentence: String(sentence).trim(),
+          level,
+          baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey,
+        }),
+        fetchJob: getSentenceJob,
+        intervalMs: POLL_SENTENCE_MS,
+        timeoutMs: TIMEOUT_SENTENCE_MS,
+        maxFailures: POLL_MAX_FAILURES,
+        netError: '网络不稳定，没拿到批改结果，请再提交一次',
+        timeoutError: '批改超时了，再点一次「提交批改」即可',
+        isAlive: () => aliveRef.current,
+      })
+      if (out.aborted) return
+      const g = out.data || {}
+      setSentenceGrade({ ...g, sentence: String(sentence).trim() })
+      if (g.usesTarget === false || (Number(g.score) || 0) < 60) {
+        markWrong({ head: cur.head, entry: cur.entry, brief: cur.meaning }, 'forgot')
+      } else if ((Number(g.score) || 0) >= 85) {
+        clearWrongWord(cur.head)
+      }
+    } catch (e) {
+      setSentenceError(e.message || '批改失败')
+    } finally {
+      setSentenceGrading(false)
+    }
+  }
+  const nextSentence = () => { setSentenceGrade(null); setSentenceIndex((i) => i + 1) }
+  const exitSentence = () => { setView('search'); setSentenceItems([]); setSentenceGrade(null); setSentenceError('') }
+
   /* ---------- 自测题 ---------- */
   const runQuiz = async () => {
     const scope = quizScope === 'book' && activeBook ? activeBook.entries : entries
@@ -711,6 +822,8 @@ export default function App() {
     sidebarOpen, onToggleSidebar: toggleSidebar,
     dueCount: due.length, onStartReview: startReview, nextDue,
     onOpenQuiz: () => setQuizSetupOpen(true), quizDisabled: !entries.length,
+    onOpenSentence: () => { setSentenceItems([]); setSentenceGrade(null); setSentenceError(''); setView('sentence') },
+    sentenceDisabled: !entries.length && !favorites.length,
     account, onOpenAuth: () => setAuthOpen(true),
     status, hasKey, stats, streak, syncCode, lastSyncAt,
     onOpenSettings: () => { closeSidebarOnMobile(); setSettingsOpen(true) },
@@ -783,6 +896,12 @@ export default function App() {
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
             onSpellWrong={noteSpellWrong}
             onReveal={() => setRevealed(true)} onGrade={grade} onKill={killCurrent} onExit={exitReview} />
+        ) : view === 'sentence' ? (
+          <SentencePane
+            items={sentenceItems} index={sentenceIndex} mode={sentenceMode} setMode={setSentenceMode}
+            busy={sentenceBusy} grading={sentenceGrading} grade={sentenceGrade} error={sentenceError}
+            onStart={startSentence} onGrade={gradeSentence} onNext={nextSentence} onExit={exitSentence}
+            onRetryGrade={() => sentenceGrade && gradeSentence(sentenceGrade.sentence)} />
         ) : view === 'quiz' ? (
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
