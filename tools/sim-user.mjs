@@ -831,6 +831,22 @@ async function runProfile(browser, p) {
       check(p.id, '造句有两种模式：自由 / 翻译', modes.join('/') === '自由造句/翻译造句', modes.join('/'));
       await auditShot('sentence-setup');
 
+      // 难度与题量都是可选的（用户要求）
+      const opts = await page.evaluate(() => ({
+        diff: [...document.querySelectorAll('.opt-row')][0] ? [...document.querySelectorAll('.opt-row')[0].querySelectorAll('.opt-chip')].map((b) => b.textContent.trim()) : [],
+        counts: [...document.querySelectorAll('.opt-row')][1] ? [...document.querySelectorAll('.opt-row')[1].querySelectorAll('.opt-chip')].map((b) => b.textContent.trim()) : [],
+      }));
+      check(p.id, '难度三档可选', opts.diff.join('/') === '简单/中等/困难', opts.diff.join('/'));
+      check(p.id, '题量可选 5/10/15/20 + 自定义', opts.counts.join('/') === '5 题/10 题/15 题/20 题/自定义', opts.counts.join('/'));
+      await page.locator('.opt-row').nth(0).locator('.opt-chip', { hasText: '困难' }).click();
+      await page.locator('.opt-row').nth(1).locator('.opt-chip', { hasText: '自定义' }).click();
+      await page.locator('.opt-input').fill('3');
+      await page.waitForTimeout(200);
+      const pref = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-sentence-pref') || '{}'));
+      check(p.id, '难度与题量记在本机', pref.difficulty === '困难' && pref.count === 3, JSON.stringify(pref));
+      await auditShot('sentence-options');
+      await page.locator('.opt-row').nth(1).locator('.opt-chip').filter({ hasText: /^5 题$/ }).click();
+
       // 选翻译模式（要给中文句子）
       await page.locator('.mode-card', { hasText: '翻译造句' }).click();
       await page.locator('.sentence-setup .primary-btn').click();
@@ -871,9 +887,42 @@ async function runProfile(browser, p) {
       check(p.id, '没用上目标词 → 明确标出来且分数低', bad.score < 60 && /没有用上/.test(bad.flag), JSON.stringify({ score: bad.score, flag: bad.flag }).slice(0, 80));
       check(p.id, '批改给出具体问题（不是一句"注意语法"）', bad.problems.length > 0 && bad.problems[0].length > 6, bad.problems[0] || '');
       check(p.id, '造句没写好会自动进错词本', Object.keys(bad.wrong).some((k) => k.includes(head2.toLowerCase())), Object.keys(bad.wrong).join(','));
+
+      // ③ 收进错句本（完全由用户决定收不收）
+      await page.locator('.sentence-grade .ghost-btn', { hasText: '收进错句本' }).click();
+      await page.waitForTimeout(400);
+      const saved = await page.evaluate(() => ({
+        n: JSON.parse(localStorage.getItem('vb-sentences') || '[]').length,
+        label: (document.querySelector('.sentence-grade .ghost-btn') || {}).textContent || '',
+      }));
+      check(p.id, '可以把自己写的句子收进错句本', saved.n === 1 && /已在错句本/.test(saved.label), JSON.stringify(saved));
       await page.locator('.sentence-pane .ghost-btn', { hasText: '退出练习' }).click();
       await page.waitForTimeout(400);
       check(p.id, '退出造句回到查词界面', (await page.locator('.search-bar').count()) === 1);
+
+      // ④ 错句本能打开、看得到、删得掉
+      await clickTopAction(/造句/);
+      await page.waitForSelector('.sentence-setup', { timeout: 8000 });
+      await page.locator('.book-link').click();
+      await page.waitForSelector('.sentence-book', { timeout: 8000 });
+      const book = await page.evaluate(() => ({
+        items: document.querySelectorAll('.sentence-book-item').length,
+        hasMine: /我写的/.test(document.querySelector('.sentence-book')?.innerText || ''),
+        hasScore: Boolean(document.querySelector('.sb-score')),
+      }));
+      check(p.id, '错句本列出收藏的句子（含我的原句与分数）', book.items === 1 && book.hasMine && book.hasScore, JSON.stringify(book));
+      await auditShot('sentence-book');
+      await page.locator('.sentence-book .icon-btn.danger').first().click();
+      await page.waitForTimeout(400);
+      const afterDel = await page.evaluate(() => ({
+        n: JSON.parse(localStorage.getItem('vb-sentences') || '[]').length,
+        tombstones: JSON.parse(localStorage.getItem('vb-deleted-sentences') || '[]').length,
+      }));
+      check(p.id, '从错句本删除（并留墓碑，避免同步时被带回来）', afterDel.n === 0 && afterDel.tombstones === 1, JSON.stringify(afterDel));
+      await page.locator('.sentence-book .primary-btn').click();
+      await page.waitForTimeout(300);
+      await page.locator('.sentence-setup .ghost-btn', { hasText: '回到查词' }).click();
+      await page.waitForTimeout(300);
     }
 
     at('自测题');

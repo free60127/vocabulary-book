@@ -4,7 +4,8 @@ import {
   loadDeletedFavorites, loadFavorites, loadKilled, loadRevived, loadSchedule, loadWrong,
   localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory, saveBooks, saveDays,
   saveDeletedBooks, saveDeletedEntries, saveFavorites, saveDeletedFavorites, saveHistory,
-  saveKilled, saveLastExportAt, saveRevived, saveSchedule, saveWrong,
+  loadDeletedSentences, loadSentences, saveDeletedSentences, saveKilled, saveLastExportAt,
+  saveRevived, saveSchedule, saveSentences, saveWrong,
 } from '../storage.js';
 import {
   allEntries, createBook, entryTombstoneKey, removeBook, removeEntry, renameBook,
@@ -43,6 +44,11 @@ export function useBooks({ flash }) {
   const [revived, setRevived] = useState(loadRevived);
   /** 错词本：复习里"没答上来"的词，答对一次就出本 */
   const [wrong, setWrong] = useState(loadWrong);
+  /* 错句本：自己收藏的造句练习（含批改结果），跟着云同步走 */
+  const [sentences, setSentences] = useState(loadSentences);
+  const [deletedSentences, setDeletedSentences] = useState(loadDeletedSentences);
+  const persistSentences = useCallback((next) => { setSentences(next); saveSentences(next); }, []);
+  const persistDeletedSentences = useCallback((next) => { setDeletedSentences(next); saveDeletedSentences(next); }, []);
 
   /* ---------- 落盘 ---------- */
   const persistBooks = useCallback((next) => { setBooks(next); saveBooks(next); }, []);
@@ -285,15 +291,51 @@ export function useBooks({ flash }) {
   }, [schedule, persistSchedule, markStudied]);
 
   /* ---------- 合并写回（云同步 / 导入备份共用） ---------- */
+  /* ---------- 错句本 ---------- */
+  const addSentence = useCallback((rec) => {
+    if (!rec || !rec.head || !rec.sentence) return null
+    // 同一条句子（同一个词 + 同一句）只留一份，重复收藏就更新批改结果
+    const id = 'st-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+    const item = {
+      id,
+      head: rec.head,
+      phonetic: rec.phonetic || '',
+      meaning: rec.meaning || '',
+      mode: rec.mode || 'free',
+      cn: rec.cn || '',
+      sentence: rec.sentence,
+      score: Number(rec.score) || 0,
+      verdict: rec.verdict || '',
+      corrected: rec.corrected || '',
+      suggestion: rec.suggestion || '',
+      problems: Array.isArray(rec.problems) ? rec.problems : [],
+      difficulty: rec.difficulty || '',
+      at: Date.now(),
+    }
+    const same = sentences.find((x) => headKey(x.head) === headKey(item.head) && x.sentence === item.sentence)
+    const next = same ? sentences.map((x) => (x.id === same.id ? { ...x, ...item, id: x.id, at: x.at } : x)) : [item, ...sentences]
+    persistSentences(next.slice(0, 1000))
+    flash(same ? '这条句子已在错句本里，已更新批改结果' : '已收进错句本', TIP_NORMAL_MS)
+    return same ? same.id : id
+  }, [sentences, persistSentences, flash])
+
+  const deleteSentence = useCallback((id) => {
+    persistSentences(sentences.filter((x) => x.id !== id))
+    persistDeletedSentences([...deletedSentences, id].slice(-2000))
+    flash('已从错句本移除', TIP_NORMAL_MS)
+  }, [sentences, deletedSentences, persistSentences, persistDeletedSentences, flash])
+
   const applyMerged = useCallback((merged) => {
     persistBooks(merged.books); persistSchedule(merged.review);
     persistFavorites(merged.favorites || []);
     persistDays(merged.days); persistHistory(merged.history);
     persistDeletedBooks(merged.deletedBooks); persistDeletedEntries(merged.deletedEntries);
     persistDeletedFavorites(merged.deletedFavorites || []);
+    persistSentences(merged.sentences || []);
+    persistDeletedSentences(merged.deletedSentences || []);
     persistKilled(merged.killed || {}); persistRevived(merged.revived || {});
     persistWrong(merged.wrong || {});
-  }, [persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory, persistDeletedBooks, persistDeletedEntries, persistDeletedFavorites, persistKilled, persistRevived, persistWrong]);
+  }, [persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory, persistDeletedBooks, persistDeletedEntries, persistDeletedFavorites, persistSentences, persistDeletedSentences, persistKilled, persistRevived, persistWrong]);
 
   const exportBackup = useCallback(() => {
     const payload = { app: 'vocabulary-book', version: 1, exportedAt: new Date().toISOString(), ...local };
@@ -322,7 +364,8 @@ export function useBooks({ flash }) {
   return {
     // 数据
     books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites,
-    killed, revived, wrong,
+    killed, revived, wrong, sentences, deletedSentences,
+    addSentence, deleteSentence,
     entries, stats, streak, due, todayQueue, local,
     // 落盘
     persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory,

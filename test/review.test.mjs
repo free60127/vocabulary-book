@@ -12,8 +12,9 @@ import {
   mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
   spellHint, summarizeStreak, wrongList,
 } from '../src/review.js';
-import { sanitizeFollowup } from '../server/resultShape.mjs';
-import { FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage } from '../server/prompt.mjs';
+import { sanitizeFollowup, sanitizeSentenceGrade } from '../server/resultShape.mjs';
+import { mergeSentences, localSnapshot } from '../src/storage.js';
+import { SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, buildSentenceMakeMessage, DIFFICULTY_KEYS, normalizeDifficulty, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage } from '../server/prompt.mjs';
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -138,7 +139,7 @@ console.log('=== 复习排期测试 ===\n');
 }
 
 console.log('\n' + '='.repeat(62));
-const failed = results.filter((r) => !r.ok);
+/* 失败清单在**最后**统一算（写在中间的话，后面追加的检查 FAIL 了也不计数、退出码还是 0） */
 
 /* ==========================================================================
    复习队列（本子 + 收藏夹 + 斩掉）：这三条规则直接决定"今天要背什么"，
@@ -352,5 +353,58 @@ const failed = results.filter((r) => !r.ok);
   check('追问：不再要求 JSON 模式（指令冲突会让模型回空壳）', /不要 JSON/.test(FOLLOWUP_SYSTEM_PROMPT));
 }
 
+
+/* ---------- 造句批改：信息完整（线上真实事故：译"每周"被判成该删） ---------- */
+{
+  check('批改提示词把"信息完整"列为独立维度', /信息完整/.test(SENTENCE_GRADE_PROMPT));
+  check('批改提示词禁止改写时丢信息', /绝不允许丢信息/.test(SENTENCE_GRADE_PROMPT));
+  check('批改提示词给了"每周"这个具体反例',
+    /our weekly promotional emails/.test(SENTENCE_GRADE_PROMPT) && /删掉/.test(SENTENCE_GRADE_PROMPT));
+  check('批改提示词要求输出信息点与遗漏清单',
+    /"points"/.test(SENTENCE_GRADE_PROMPT) && /"missing"/.test(SENTENCE_GRADE_PROMPT));
+  const msg = buildSentenceGradeMessage({
+    head: 'opt in', cn: '用户需要主动选择加入，才能接收我们每周发送的促销邮件。',
+    mode: 'translate', sentence: 'Users opt in.', level: '四六级',
+  });
+  check('翻译模式的请求里带上了"改表达可以，删信息不行"', /改表达可以，删信息不行/.test(msg));
+  check('请求里带着要核对的中文原句', /每周发送的促销邮件/.test(msg));
+  check('等级不再是 undefined（normalizeLevel 返回的是名字，不是对象）',
+    /【学生水平】四六级/.test(msg) && !/undefined/.test(msg),
+    (msg.split(String.fromCharCode(10)).find((l) => l.includes('学生水平')) || ''));
+  check('清洗器放行 fidelity 维度',
+    sanitizeSentenceGrade({ score: 70, problems: [{ kind: 'fidelity', issue: '漏了"每周"', fix: '补上 every week' }] }).problems[0].kind === 'fidelity');
+  check('清洗器带回信息点与遗漏清单',
+    (() => { const g = sanitizeSentenceGrade({ score: 70, points: ['每周'], missing: ['每周'] }); return g.points.length === 1 && g.missing.length === 1; })());
+}
+
+
+/* ---------- 造句：难度档位 + 错句本合并 ---------- */
+{
+  check('难度三档都存在', DIFFICULTY_KEYS.join('/') === '简单/中等/困难', DIFFICULTY_KEYS.join('/'));
+  check('未知难度回落到中等', normalizeDifficulty('超难') === '中等' && normalizeDifficulty('困难') === '困难');
+  const easy = buildSentenceMakeMessage({ points: ['a｜n｜b'], level: '四六级', difficulty: '简单' });
+  const hard = buildSentenceMakeMessage({ points: ['a｜n｜b'], level: '四六级', difficulty: '困难' });
+  check('出题难度真的进了提示词', /8~14 词/.test(easy) && /20 词以上/.test(hard));
+  const gradeHard = buildSentenceGradeMessage({ head: 'a', mode: 'free', sentence: 'x', level: '四六级', difficulty: '困难' });
+  check('批改严格程度跟着难度走', /高分写作的标准/.test(gradeHard) && !/不因为"表达朴素"扣分/.test(gradeHard));
+
+  const now = Date.now();
+  const mk = (id, score, sentence) => ({ id, head: 'object', sentence, score, at: now });
+  check('错句本按 id 去重、保留分数更高的那份',
+    mergeSentences([mk('a', 60, 'old')], [mk('a', 90, 'new')]).map((x) => x.sentence).join() === 'new');
+  check('错句本过墓碑（删掉的不会被云端带回来）',
+    mergeSentences([mk('a', 80, 'x')], [mk('a', 80, 'x'), mk('b', 80, 'y')], ['b']).map((x) => x.id).join() === 'a');
+  check('错句本按时间倒序', (() => {
+    const older = { id: 'old', head: 'a', sentence: 's', score: 50, at: now - 10000 };
+    const newer = { id: 'new', head: 'b', sentence: 's', score: 50, at: now };
+    return mergeSentences([older, newer], []).map((x) => x.id).join() === 'new,old';
+  })());
+  check('云快照里带上了错句本与它的墓碑', (() => {
+    const snap = localSnapshot({ sentences: [mk('a', 80, 'x')], deletedSentences: ['z'] });
+    return snap.sentences.length === 1 && snap.deletedSentences.join() === 'z';
+  })());
+}
+
+const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

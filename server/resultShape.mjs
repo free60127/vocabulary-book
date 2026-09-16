@@ -293,7 +293,7 @@ export function sanitizeSentenceTasks(raw) {
   return { title: boundedString(src.title, 200) || ('造句练习 · ' + items.length + ' 题'), items };
 }
 
-const SENTENCE_KINDS = ['word', 'grammar', 'context'];
+const SENTENCE_KINDS = ['word', 'grammar', 'context', 'fidelity'];
 
 /**
  * 批改结果。
@@ -321,9 +321,13 @@ export function sanitizeSentenceGrade(raw) {
     })
     .filter(Boolean);
   const usesTarget = src.usesTarget === undefined ? score > 0 : Boolean(src.usesTarget);
+  const strList = (v, cap) => (Array.isArray(v) ? v : [])
+    .map((x) => boundedString(x, 300).trim()).filter(Boolean).slice(0, cap);
   return {
     score: usesTarget ? score : Math.min(score, 40),
     usesTarget,
+    points: strList(src.points, 12),
+    missing: strList(src.missing, 12),
     verdict: boundedString(src.verdict, 600).trim(),
     problems,
     suggestion: boundedString(src.suggestion, 800).trim(),

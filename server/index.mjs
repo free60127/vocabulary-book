@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as dnsLookup } from 'node:dns';
 
-import { LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { normalizeDifficulty, LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
 import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
@@ -503,7 +503,7 @@ async function runFollowupJob(jobId, { head, brief, pos, question, context, leve
  * 为什么合成一个 kind：两者都是一次短调用、同一个入口、同一套超时；
  * 分成两个 kind 只会让任务表、限流、僵尸阈值三处都要各写一遍。
  */
-async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn, sentence, level, baseUrl, model, apiKey }) {
+async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn, sentence, level, difficulty, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
   job.status = 'running';
@@ -514,7 +514,7 @@ async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn
     const raw = await callLLM({
       baseUrl, model, apiKey,
       system: SENTENCE_MAKE_PROMPT,
-      user: buildSentenceMakeMessage({ points: points.slice(0, count), level }),
+      user: buildSentenceMakeMessage({ points: points.slice(0, count), level, difficulty }),
       maxTokens: 3000,
     });
     const parsed = sanitizeSentenceTasks(parseJsonLoose(raw));
@@ -524,12 +524,12 @@ async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn
     const raw = await callLLM({
       baseUrl, model, apiKey,
       system: SENTENCE_GRADE_PROMPT,
-      user: buildSentenceGradeMessage({ head, brief, pos, mode: mode === 'translate' ? 'translate' : 'free', cn, sentence, level }),
+      user: buildSentenceGradeMessage({ head, brief, pos, mode: mode === 'translate' ? 'translate' : 'free', cn, sentence, level, difficulty }),
       maxTokens: 2000,
     });
     const grade = sanitizeSentenceGrade(parseJsonLoose(raw));
     if (!grade.verdict && !grade.score) throw new Error('模型没有给出批改结果，请重试');
-    job.data = { head, mode, sentence, ...grade };
+    job.data = { head, mode, sentence, difficulty, ...grade };
   }
   job.status = 'done';
   job.updatedAt = Date.now();
@@ -866,7 +866,7 @@ const server = http.createServer(async (req, res) => {
         const jobId = randomUUID();
         saveJob({ jobId, kind: 'sentence', title: '造句练习 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
         safeRun('sentence', jobId, () => runSentenceJob(jobId, {
-          mode: 'make', points, count, level: normalizeLevel(body.level),
+          mode: 'make', points, count, level: normalizeLevel(body.level), difficulty: normalizeDifficulty(body.difficulty),
           baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
         }));
         return json(res, 200, { ok: true, jobId, status: 'pending' });
@@ -885,6 +885,7 @@ const server = http.createServer(async (req, res) => {
         cn: String(body.cn || '').slice(0, 600),
         sentence,
         level: normalizeLevel(body.level),
+        difficulty: normalizeDifficulty(body.difficulty),
         baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
       }));
       return json(res, 200, { ok: true, jobId, status: 'pending' });

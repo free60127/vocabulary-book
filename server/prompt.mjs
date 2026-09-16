@@ -229,6 +229,36 @@ export function buildFollowupMessage({ head, brief = '', pos = '', question, con
    ========================================================================== */
 
 /**
+ * 造句练习的难度档位。
+ *
+ * 为什么单独一档而不是直接复用"学生水平"：等级（四六级/考研）说的是"面向什么考试"，
+ * 而做题当下想要的难度是另一回事 —— 同一个用户可能今天想练 8 词短句，明天想练带从句的长句。
+ * 所以难度同时影响**出题**（句子长短与结构）和**批改**（严格程度）。
+ */
+export const SENTENCE_DIFFICULTY = {
+  简单: {
+    key: '简单',
+    make: '句子短（8~14 词）、结构简单（一个主谓宾，最多一个状语）、用常见搭配；中文控制在 12~20 字',
+    grade: '只要用词与语法正确、意思到位就算好；不要求地道，不因为"表达朴素"扣分',
+  },
+  中等: {
+    key: '中等',
+    make: '句子 14~20 词，可以有一个从句或非谓语结构；中文 18~30 字，贴近考试写作的句子',
+    grade: '要求语法准确、搭配自然；表达朴素不扣分，但中式英语要指出',
+  },
+  困难: {
+    key: '困难',
+    make: '句子 20 词以上，包含从句 / 非谓语 / 虚拟语气 / 倒装等结构之一，并体现该词的**地道搭配**；中文 25~40 字',
+    grade: '按高分写作的标准要求：不仅要对，还要地道、简洁；对该词的地道搭配与语域有明确要求',
+  },
+};
+export const DIFFICULTY_KEYS = Object.keys(SENTENCE_DIFFICULTY);
+export const DEFAULT_DIFFICULTY = '中等';
+export function normalizeDifficulty(d) {
+  return DIFFICULTY_KEYS.includes(d) ? d : DEFAULT_DIFFICULTY;
+}
+
+/**
  * 翻译模式的"出题"：给中文句子，学生要用指定单词把它译成英文。
  *
  * 难点在于**中文句子必须真的会用到那个词**，而不是硬塞 —— 所以要求模型先想英文再倒推中文，
@@ -254,10 +284,13 @@ export const SENTENCE_MAKE_PROMPT = `你是英语写作老师，要为学生出�
   ]
 }`;
 
-export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL }) {
-  const L = normalizeLevel(level);
+export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL, difficulty = DEFAULT_DIFFICULTY }) {
+  // ⚠️ normalizeLevel 返回的是等级名（字符串），详情要再查 LEVEL_GUIDE ——
+  // 曾经写成 const L = normalizeLevel(level) 然后取 L.key，结果提示词里是"【学生水平】undefined（undefined）"
+  const L = LEVEL_GUIDE[normalizeLevel(level)];
   return '请为下面 ' + points.length + ' 个词各出一句翻译题。\n\n'
     + '【学生水平】' + L.key + '（' + L.audience + '）\n'
+    + '【句子难度】' + SENTENCE_DIFFICULTY[normalizeDifficulty(difficulty)].make + '\n'
     + '【词条】\n' + points.map((p, i) => (i + 1) + '. ' + p).join('\n')
     + '\n\n请按要求输出完整 JSON。';
 }
@@ -271,32 +304,46 @@ export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL }) {
  */
 export const SENTENCE_GRADE_PROMPT = `你是英语写作老师，正在批改学生的**造句练习**。学生必须用上指定的目标词。
 
-请从三个维度批改，并给出**最小修改**建议：
+请从四个维度批改，并给出**最小修改**建议：
 1. **用词**（目标词是否用对：词性、搭配、含义是否准确）；
 2. **语法**（时态、单复数、语序、冠词……）；
-3. **语境**（句子是否成立、语域是否得体、是不是"为了用这个词硬造的句子"）。
+3. **语境**（句子是否成立、语域是否得体、是不是"为了用这个词硬造的句子"）；
+4. **信息完整**（**翻译模式必查**：把中文原句的信息点逐条列出来 —— 谁/做什么/频率/时间/条件/数量 ——
+   检查学生的句子是否**每一条都覆盖到**；漏掉任何一条都要单独列为问题）。
 
 输出 JSON（不要输出别的）：
 {
   "score": 0-100 的整数（综合分）,
   "usesTarget": true/false（学生句子里到底有没有用上目标词）,
   "verdict": "一句话结论（中文，先夸具体的点再指出问题）",
+  "points": ["中文原句的信息点，逐条列出（自由模式则列出学生自己表达的信息点）"],
+  "missing": ["学生漏掉的信息点；一条都没有就空数组"],
   "problems": [
-    { "kind": "word | grammar | context", "issue": "问题是什么", "fix": "最小修改建议" }
+    { "kind": "word | grammar | context | fidelity", "issue": "问题是什么", "fix": "最小修改建议" }
   ],
   "suggestion": "在学生原意的基础上，给一个更地道/更贴语境的写法（英文）",
   "corrected": "把学生原句改对后的英文（尽量保留学生的用词与结构）"
 }
 
-硬性要求：
+**最重要的一条（违反即算批改错误）**：
+- 改写**绝不允许丢信息**。『corrected』 与 『suggestion』 必须保留原句的**全部信息点**：
+  频率（every week / twice a month）、时间、条件（unless / if）、数量、范围（all / some）、
+  以及主语的限定。**不得为了"顺口""简洁"而删掉任何一条。**
+- 如果你觉得某个表达生硬，**改表达，不要改内容**。例如"每周的促销邮件"生硬时，
+  应改成 our weekly promotional emails（保留"每周"），而**不是**把 every week 删掉。
+- 学生漏了信息点：『corrected』 要**补回来**，并在 problems 里用 kind="fidelity" 说明漏了什么。
+- 漏一个信息点，分数至少要扣 15 分。
+
+其它硬性要求：
 - 没用到目标词 → usesTarget=false，score 不超过 40，并明确说出"这句里没有出现 X"；
 - 逐条 problems 必须具体（指出是哪个词/哪个成分），不要写"注意语法"这种空话；
-- suggestion 只在真有必要时给（原句已经很好的话，就重复原句）；
+- 只有**确实成立**的问题才写；原句已经很好时 problems 留空、suggestion 重复原句；
 - 全部用中文写解释，例句保留英文；
 - 不确定的用法（地区差异、极少见搭配）直说"不确定"，不要编。`;
 
-export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = 'free', cn = '', sentence, level = DEFAULT_LEVEL }) {
-  const L = normalizeLevel(level);
+
+export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = 'free', cn = '', sentence, level = DEFAULT_LEVEL, difficulty = DEFAULT_DIFFICULTY }) {
+  const L = LEVEL_GUIDE[normalizeLevel(level)];
   return '【目标词】' + head
     + (pos ? '（' + pos + '）' : '')
     + (brief ? '\n【词义】' + brief : '')
@@ -304,5 +351,14 @@ export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = '
     + (mode === 'translate' && cn ? '\n【要翻译的中文】' + cn : '')
     + '\n【学生写的句子】' + sentence
     + '\n【学生水平】' + L.key
+    + '\n【本次句子难度】' + SENTENCE_DIFFICULTY[normalizeDifficulty(difficulty)].grade
+    // 把"信息点核对"贴进请求里，比只写在系统提示更不容易被模型忽略
+    // （线上真实事故：学生译"才能接收我们每周发送的促销邮件"，批改建议把 every week 去掉，
+    //   改对后的版本也没了"每周" —— 对翻译题来说这是信息缺失，不是润色）
+    + (mode === 'translate' && cn
+      ? '\n\n批改前先做一件事：把上面那句中文的信息点逐条列出来（谁 / 做什么 / 频率 / 时间 / 条件 / 数量），'
+        + '再逐条对照学生的句子；漏掉的写进 missing，并让 corrected 把它们补齐。'
+        + '改表达可以，删信息不行。'
+      : '')
     + '\n\n请按要求输出批改 JSON。';
 }

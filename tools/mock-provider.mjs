@@ -135,6 +135,8 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
           score: used ? 88 : 30,
           usesTarget: used,
           verdict: used ? '用词准确，语境也自然。' : '这句里没有出现目标词。',
+          points: ['谁', '做什么', '频率'],
+          missing: used ? [] : [],
           problems: used ? [] : [{ kind: 'word', issue: '句子里没有用上 ' + head, fix: '把 ' + head + ' 放进句子里再试' }],
           suggestion: used ? sentence : 'I want to use ' + head + ' in a sentence.',
           corrected: used ? sentence : 'I want to use ' + head + ' in a sentence.',

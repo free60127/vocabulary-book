@@ -11,7 +11,8 @@ import { useBooks } from './hooks/useBooks.js'
 import { useCloud } from './hooks/useCloud.js'
 import { useAuth } from './hooks/useAuth.js'
 import {
-  SIDE_STATE_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet, safeSet,
+  SENTENCE_PREF_KEY, SIDE_STATE_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet,
+  safeSet,
   saveFollowups, saveSettings, saveSpell, saveTheme,
 } from './storage.js'
 import { applyTheme } from './theme.js'
@@ -38,6 +39,7 @@ import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
 import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
+import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -66,7 +68,7 @@ export default function App() {
   const store = useBooks({ flash })
   const {
     books, schedule, history, favorites, local,
-    entries, stats, streak, due, todayQueue,
+    entries, stats, streak, due, todayQueue, sentences, addSentence, deleteSentence,
     markStudied, applyMerged,
     saveEntry, newBook, deleteEntry: dropEntry, deleteBook: dropBook, renameBook, mergeBooksInto,
     pushHistoryEntry, attachFavoriteEntry,
@@ -147,6 +149,19 @@ export default function App() {
   const [sentenceBusy, setSentenceBusy] = useState(false)
   const [sentenceGrading, setSentenceGrading] = useState(false)
   const [sentenceError, setSentenceError] = useState('')
+  /* 难度与题量：记在本机（"今天想练几句"是当下心情，不需要跨设备同步） */
+  const [sentenceCount, setSentenceCount] = useState(() => {
+    const v = Number(safeGet(SENTENCE_PREF_KEY, '') ? JSON.parse(safeGet(SENTENCE_PREF_KEY, '{}')).count : 0)
+    return v >= 1 && v <= 30 ? v : 5
+  })
+  const [sentenceDifficulty, setSentenceDifficulty] = useState(() => {
+    try { return JSON.parse(safeGet(SENTENCE_PREF_KEY, '{}')).difficulty || '中等' } catch { return '中等' }
+  })
+  const [sentenceBookOpen, setSentenceBookOpen] = useState(false)
+  const [savedSentenceIds, setSavedSentenceIds] = useState([])
+  useEffect(() => {
+    safeSet(SENTENCE_PREF_KEY, JSON.stringify({ count: sentenceCount, difficulty: sentenceDifficulty }))
+  }, [sentenceCount, sentenceDifficulty])
 
   const cloud = useCloud({ getLocal: () => local, applyMerged, flash })
   const {
@@ -671,7 +686,7 @@ export default function App() {
     setSentenceError(''); setSentenceBusy(true); setSentenceGrade(null)
     try {
       // 一次抽 5 个：太少不像练习，太多一次批改等太久
-      const chosen = [...source].sort(() => Math.random() - 0.5).slice(0, 5)
+      const chosen = [...source].sort(() => Math.random() - 0.5).slice(0, sentenceCount)
       const points = chosen.map((x) => {
         const e = x.entry || {}
         const f = x.favorite || {}
@@ -684,7 +699,7 @@ export default function App() {
       })
       const out = await submitAndPoll({
         submit: () => sentencePractice({
-          mode: 'make', points, count: chosen.length, level,
+          mode: 'make', points, count: chosen.length, level, difficulty: sentenceDifficulty,
           baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey,
         }),
         fetchJob: getSentenceJob,
@@ -759,6 +774,31 @@ export default function App() {
     } finally {
       setSentenceGrading(false)
     }
+  }
+  /** 收进错句本：完全由用户决定（不做自动收藏，这是"私人收藏"而不是"薄弱项"） */
+  const saveSentence = () => {
+    const cur = sentenceItems[sentenceIndex]
+    if (!cur || !sentenceGrade) return
+    const id = addSentence({
+      head: cur.head, phonetic: cur.phonetic, meaning: cur.meaning,
+      mode: sentenceMode, cn: sentenceMode === 'translate' ? cur.cn : '',
+      sentence: sentenceGrade.sentence || '', score: sentenceGrade.score,
+      verdict: sentenceGrade.verdict, corrected: sentenceGrade.corrected,
+      suggestion: sentenceGrade.suggestion, problems: sentenceGrade.problems,
+      difficulty: sentenceDifficulty,
+    })
+    // 标记"这一条已收藏"：批改结果本身没有 id（是服务端返回的批改对象），
+    // 所以要挂在本地状态上，否则按钮永远显示"收进错句本"（实测踩过）
+    if (id) {
+      setSavedSentenceIds((prev) => [...prev, id])
+      setSentenceGrade((g) => (g ? { ...g, savedId: id } : g))
+    }
+  }
+  const practiceWordAgain = (item) => {
+    setSentenceBookOpen(false)
+    setSentenceItems([{ head: item.head, cn: item.cn || '', tip: '', phonetic: item.phonetic || '', meaning: item.meaning || '', key: item.head }])
+    setSentenceMode(item.mode === 'translate' && item.cn ? 'translate' : 'free')
+    setSentenceIndex(0); setSentenceGrade(null); setSentenceError(''); setView('sentence')
   }
   const nextSentence = () => { setSentenceGrade(null); setSentenceIndex((i) => i + 1) }
   const exitSentence = () => { setView('search'); setSentenceItems([]); setSentenceGrade(null); setSentenceError('') }
@@ -900,6 +940,11 @@ export default function App() {
           <SentencePane
             items={sentenceItems} index={sentenceIndex} mode={sentenceMode} setMode={setSentenceMode}
             busy={sentenceBusy} grading={sentenceGrading} grade={sentenceGrade} error={sentenceError}
+            count={sentenceCount} setCount={setSentenceCount}
+            difficulty={sentenceDifficulty} setDifficulty={setSentenceDifficulty}
+            onSaveSentence={saveSentence}
+            isSaved={Boolean(sentenceGrade && (sentenceGrade.savedId || savedSentenceIds.includes(sentenceGrade.id)))}
+            bookCount={sentences.length} onOpenBook={() => setSentenceBookOpen(true)}
             onStart={startSentence} onGrade={gradeSentence} onNext={nextSentence} onExit={exitSentence}
             onRetryGrade={() => sentenceGrade && gradeSentence(sentenceGrade.sentence)} />
         ) : view === 'quiz' ? (
@@ -978,6 +1023,11 @@ export default function App() {
 
       {mergeTarget ? (
         <MergeBookModal from={mergeTarget} books={books} onClose={() => setMergeTarget(null)} onSubmit={submitMerge} />
+      ) : null}
+
+      {sentenceBookOpen ? (
+        <SentenceBookModal items={sentences} onClose={() => setSentenceBookOpen(false)}
+          onDelete={deleteSentence} onPracticeWord={practiceWordAgain} />
       ) : null}
 
       {wrongOpen ? (

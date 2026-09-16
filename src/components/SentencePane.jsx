@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Lightbulb, LoaderCircle, RefreshCw, Send, Sparkles, Volume2, X } from 'lucide-react';
+import { ArrowRight, BookmarkPlus, Check, Lightbulb, LoaderCircle, NotebookPen, RefreshCw, Send,
+  Sparkles, Volume2, X } from 'lucide-react';
 import { speak } from '../speak.js';
 
 /**
@@ -21,7 +22,15 @@ const MODES = [
   { key: 'translate', label: '翻译造句', hint: '把给的中文译成英文，必须用上这个词' },
 ];
 
-const KIND_LABEL = { word: '用词', grammar: '语法', context: '语境' };
+const KIND_LABEL = { word: '用词', grammar: '语法', context: '语境', fidelity: '信息完整' };
+
+/** 难度：同时影响出题（句子长短与结构）与批改（严格程度） */
+const DIFFICULTIES = [
+  { key: '简单', hint: '8~14 词短句，常见搭配' },
+  { key: '中等', hint: '14~20 词，可含一个从句' },
+  { key: '困难', hint: '20 词以上，从句/非谓语/地道搭配' },
+];
+const COUNTS = [5, 10, 15, 20];
 
 /** 分数配色：80+ 好、60+ 一般、以下要再看一眼 */
 function scoreTone(score) {
@@ -33,9 +42,12 @@ function scoreTone(score) {
 
 export default function SentencePane({
   items, index, mode, setMode, busy, error,
+  count, setCount, difficulty, setDifficulty,
   onStart, onGrade, onNext, onExit, grade, grading, onRetryGrade,
+  onSaveSentence, isSaved, bookCount, onOpenBook,
 }) {
   const [text, setText] = useState('');
+  const [custom, setCustom] = useState(false);
   const boxRef = useRef(null);
   const cur = items[index];
 
@@ -65,12 +77,44 @@ export default function SentencePane({
               </button>
             ))}
           </div>
+
+          <div className="sentence-opts">
+            <div className="opt-row">
+              <span className="opt-label">句子难度</span>
+              <div className="chip-row">
+                {DIFFICULTIES.map((dd) => (
+                  <button key={dd.key} className={'opt-chip' + (difficulty === dd.key ? ' active' : '')}
+                    onClick={() => setDifficulty(dd.key)} title={dd.hint}>{dd.key}</button>
+                ))}
+              </div>
+              <span className="muted small opt-note">{DIFFICULTIES.find((x) => x.key === difficulty)?.hint}</span>
+            </div>
+            <div className="opt-row">
+              <span className="opt-label">练几个词</span>
+              <div className="chip-row">
+                {COUNTS.map((n) => (
+                  <button key={n} className={'opt-chip' + (!custom && count === n ? ' active' : '')}
+                    onClick={() => { setCustom(false); setCount(n) }}>{n} 题</button>
+                ))}
+                <button className={'opt-chip' + (custom ? ' active' : '')} onClick={() => setCustom(true)}>自定义</button>
+              </div>
+              {custom ? (
+                <input className="opt-input" type="number" min="1" max="30" value={count}
+                  onChange={(e) => setCount(Math.max(1, Math.min(30, Number(e.target.value) || 1)))} />
+              ) : null}
+            </div>
+          </div>
+
+          <button className="book-link" onClick={onOpenBook}>
+            <NotebookPen size={14} />错句本{bookCount ? `（${bookCount}）` : '（空）'}
+            <span className="muted small">收藏起来的句子，随时回来复习</span>
+          </button>
           {error ? <div className="error-banner" role="alert"><X size={15} /><span className="error-text">{error}</span></div> : null}
           <div className="modal-actions">
             <button className="ghost-btn" onClick={onExit}>回到查词</button>
             <button className="primary-btn" onClick={() => onStart(mode)} disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-              {busy ? '正在出题…' : `开始（${mode === 'translate' ? '翻译造句' : '自由造句'}）`}
+              {busy ? '正在出题…' : `开始（${mode === 'translate' ? '翻译造句' : '自由造句'} · ${difficulty} · ${count} 题）`}
             </button>
           </div>
         </div>
@@ -99,7 +143,7 @@ export default function SentencePane({
       <div className="panel sentence-pane">
         <div className="panel-head">
           <h2>造句 {index + 1} / {items.length}
-            <span className="muted small"> · {mode === 'translate' ? '翻译造句' : '自由造句'}</span>
+            <span className="muted small"> · {mode === 'translate' ? '翻译造句' : '自由造句'} · {difficulty}</span>
           </h2>
           <button className="ghost-btn sm" onClick={onExit}>退出练习</button>
         </div>
@@ -156,6 +200,9 @@ export default function SentencePane({
               </div>
             </div>
 
+            {grade.missing && grade.missing.length ? (
+              <p className="grade-missing">漏掉的信息：{grade.missing.join('、')}</p>
+            ) : null}
             {grade.problems && grade.problems.length ? (
               <ul className="grade-problems">
                 {grade.problems.map((p, i) => (
@@ -185,6 +232,9 @@ export default function SentencePane({
             ) : null}
 
             <div className="sentence-actions">
+              <button className={'ghost-btn sm' + (isSaved ? ' saved' : '')} onClick={onSaveSentence} disabled={isSaved}>
+                <BookmarkPlus size={13} />{isSaved ? '已在错句本' : '收进错句本'}
+              </button>
               <button className="ghost-btn sm" onClick={onRetryGrade} disabled={grading}><RefreshCw size={13} />重新批改</button>
               <button className="primary-btn" onClick={onNext}>
                 {index + 1 >= items.length ? '完成这一轮' : '下一个词'} <ArrowRight size={15} />

@@ -24,6 +24,12 @@ export const KILLED_KEY = 'vb-killed';
 export const REVIVED_KEY = 'vb-revived';
 /** 拼写模式开关 */
 export const SPELL_KEY = 'vb-spell';
+/** 错句本：自己收藏的造句练习（含批改结果） */
+export const SENTENCES_KEY = 'vb-sentences';
+/** 删掉的句子 id（云同步时需要墓碑，否则删了的句子会被另一台设备带回来） */
+export const DELETED_SENTENCES_KEY = 'vb-deleted-sentences';
+/** 造句练习的偏好：难度 / 题量（本机记住，换设备不跟走） */
+export const SENTENCE_PREF_KEY = 'vb-sentence-pref';
 /** 外观偏好：system | light | dark */
 export const THEME_KEY = 'vb-theme';
 /** 上次导出备份的时间（用来提醒"很久没备份了"） */
@@ -251,7 +257,28 @@ export const loadSettings = () => parseObject(safeGet(SETTINGS_KEY, '{}'));
 export const saveSettings = (s) => safeSet(SETTINGS_KEY, JSON.stringify(s || {}));
 
 /* ---------- 快照：云同步与备份共用 ---------- */
-export function localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong }) {
+export function loadSentences() {
+  const raw = safeGet(SENTENCES_KEY, '[]');
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((x) => x && x.id && x.head && x.sentence) : [];
+  } catch { return []; }
+}
+export function saveSentences(list) {
+  safeSet(SENTENCES_KEY, JSON.stringify(Array.isArray(list) ? list.slice(0, 1000) : []));
+}
+export function loadDeletedSentences() {
+  const raw = safeGet(DELETED_SENTENCES_KEY, '[]');
+  try {
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
+  } catch { return []; }
+}
+export function saveDeletedSentences(ids) {
+  safeSet(DELETED_SENTENCES_KEY, JSON.stringify(Array.isArray(ids) ? ids.slice(-2000) : []));
+}
+
+export function localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong, sentences, deletedSentences }) {
   return {
     books: Array.isArray(books) ? books : [],
     review: schedule && typeof schedule === 'object' ? schedule : {},
@@ -261,6 +288,8 @@ export function localSnapshot({ books, schedule, days, history, favorites, delet
     deletedBooks: Array.isArray(deletedBooks) ? deletedBooks : [],
     deletedEntries: Array.isArray(deletedEntries) ? deletedEntries : [],
     deletedFavorites: Array.isArray(deletedFavorites) ? deletedFavorites : [],
+    sentences: Array.isArray(sentences) ? sentences : [],
+    deletedSentences: Array.isArray(deletedSentences) ? deletedSentences : [],
     killed: killed && typeof killed === 'object' ? killed : {},
     revived: revived && typeof revived === 'object' ? revived : {},
     wrong: wrong && typeof wrong === 'object' ? wrong : {},
@@ -316,11 +345,27 @@ export function mergeHistory(local, remote, limit = HISTORY_LIMIT) {
   return orderHistory([...best.values()], limit, Infinity).slice(0, limit);
 }
 
+/**
+ * 错句本的合并：按 id 去重，**保留分数更高的那份**（同一条句子被两台设备批改过时，
+ * 用户更想看到"改完之后"的结果），并过滤掉墓碑里的 id。
+ */
+export function mergeSentences(local, remote, deleted = [], limit = 1000) {
+  const dead = new Set(Array.isArray(deleted) ? deleted : []);
+  const best = new Map();
+  for (const item of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+    if (!item || !item.id || dead.has(item.id)) continue;
+    const prev = best.get(item.id);
+    if (!prev || (Number(item.score) || 0) >= (Number(prev.score) || 0)) best.set(item.id, item);
+  }
+  return [...best.values()].sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0)).slice(0, limit);
+}
+
 /** 把云端快照合并进本机（纯计算，不落盘；落盘由调用方决定） */
 export function mergeSnapshot(local, remote) {
   const deletedBooks = unionTombstones(local.deletedBooks, remote && remote.deletedBooks, 200);
   const deletedEntries = unionTombstones(local.deletedEntries, remote && remote.deletedEntries, 5000);
   const deletedFavorites = unionTombstones(local.deletedFavorites, remote && remote.deletedFavorites, 2000);
+  const deletedSentences = unionTombstones(local.deletedSentences, remote && remote.deletedSentences, 2000);
   const { list: books, booksAdded, entriesAdded } = mergeBooks(local.books, remote && remote.books, deletedBooks, deletedEntries);
   // 收藏夹同样要过墓碑：不然"删掉的收藏"会在下一次同步里被云端旧副本复活
   const dead = new Set(deletedFavorites);
@@ -331,9 +376,11 @@ export function mergeSnapshot(local, remote) {
     days: mergeDays(local.days, remote && remote.days),
     history: mergeHistory(local.history, remote && remote.history),
     favorites,
+    sentences: mergeSentences(local.sentences, remote && remote.sentences, deletedSentences),
     deletedBooks,
     deletedEntries,
     deletedFavorites,
+    deletedSentences,
     killed: mergeStamps(local.killed, remote && remote.killed),
     revived: mergeStamps(local.revived, remote && remote.revived),
     // 错词本按词头合并：取"次数更多 + 更近"的那份（同一份错不该被数两遍）
