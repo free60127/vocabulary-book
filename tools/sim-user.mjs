@@ -28,6 +28,20 @@ const { chromium, devices } = await requirePlaywright();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /**
+ * 点保存栏主按钮：全新安装时保存栏是「新建单词本并加入」，
+ * 现在走的是**应用内弹窗**（不再是 window.prompt）—— 不处理的话保存会静默失败。
+ */
+const saveViaBar = async (page) => {
+  await page.locator('.save-bar .primary-btn').click();
+  if (await page.locator('.rename-modal').count()) {
+    await page.locator('.rename-modal input').fill('我的单词本');
+    await page.locator('.rename-modal .primary-btn').click();
+    await page.waitForTimeout(350);
+  }
+};
+
+
+/**
  * 端口：默认**每次跑随机取一段**，避免和别的项目/别的会话撞车。
  *
  * 踩过的坑：姊妹项目（回译本）的 e2e 也用 8821/9821，两个会话同时跑时
@@ -181,6 +195,17 @@ async function runProfile(browser, p) {
   page.on('dialog', (d) => d.accept(d.type() === 'prompt'
     ? (prompts.length ? prompts.shift() : d.defaultValue())
     : undefined));
+
+
+
+  /** 点「新建单词本」→ 出现的是应用内弹窗（不再是 window.prompt），填名字后提交 */
+  const newBookVia = async (name) => {
+    await page.locator('.sidebar .primary-btn').click();
+    await page.waitForSelector('.rename-modal', { timeout: 8000 });
+    await page.locator('.rename-modal input').fill(name);
+    await page.locator('.rename-modal .primary-btn').click();
+    await page.waitForTimeout(400);
+  };
 
   let step = '(未开始)';
   const at = (s) => { step = s; };
@@ -340,7 +365,7 @@ async function runProfile(browser, p) {
     await page.fill('.search-input', 'object');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => /object/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
-    await page.locator('.save-bar .primary-btn').click();
+    await saveViaBar(page);
     await page.waitForSelector('.saved-flag', { timeout: 10000 });
     await auditShot('saved');
 
@@ -444,7 +469,7 @@ async function runProfile(browser, p) {
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => /banana/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
     await page.waitForTimeout(200);
-    await page.locator('.save-bar .primary-btn').click();
+    await saveViaBar(page);
     await page.waitForTimeout(400);
     check(p.id, '第二个词也存进本子（复习至少两张卡）',
       (await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').flatMap((b) => b.entries.map((e) => e.head)))).includes('banana'));
@@ -475,7 +500,7 @@ async function runProfile(browser, p) {
     await page.waitForTimeout(250);
     check(p.id, '再查同一个词时卡片认出「已在单词本里」', (await page.locator('.saved-flag').count()) === 1,
       `标记 ${await page.locator('.saved-flag').count()} 个`);
-    await page.locator('.save-bar .primary-btn').click();
+    await saveViaBar(page);
     await page.waitForTimeout(400);
     const heads = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').flatMap((b) => b.entries.map((e) => e.head)));
     check(p.id, '同一个词存两次不会变成两条',
@@ -538,10 +563,17 @@ async function runProfile(browser, p) {
           row ? `改名=${row.edit} 合并=${row.merge} 删除=${row.del}` : '');
       }
 
-      // ② 新建第二个本子（走真实的 prompt 流程）
-      prompts.push('临时本子');
+      // ② 新建第二个本子（走真实的应用内弹窗；以前是 window.prompt，取消就静默失败）
       await page.locator('.sidebar .primary-btn').click();
-      await page.waitForTimeout(400);
+      await page.waitForSelector('.rename-modal', { timeout: 8000 });
+      check(p.id, '「新建单词本」用的是应用内弹窗（不是浏览器 prompt）',
+        (await page.evaluate(() => document.querySelectorAll('.rename-modal input').length)) === 1);
+      // 先试一次"取消"：应该给反馈，而不是什么都不发生
+      await page.locator('.rename-modal .ghost-btn').click();
+      await page.waitForTimeout(300);
+      const cancelTip = await page.evaluate(() => document.querySelector('.fav-tip.toast')?.textContent || '');
+      check(p.id, '取消新建时给出反馈（原来静默无反应）', /已取消/.test(cancelTip), cancelTip);
+      await newBookVia('临时本子');
       const two = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').map((b) => b.name));
       check(p.id, '新建第二个单词本', two.length === 2, two.join(' / '));
       await shot('sidebar-two-books');
@@ -1443,7 +1475,7 @@ async function runEdgeCases(browser) {
       await page.waitForFunction((t) => new RegExp(t, 'i').test(document.querySelector('.entry-card h1')?.textContent || ''), term, { timeout: 60000 });
       await page.waitForTimeout(200);
       const already = (await page.locator('.saved-flag').count()) > 0;
-      if (!already) { await page.locator('.save-bar .primary-btn').click(); await page.waitForSelector('.saved-flag', { timeout: 10000 }); }
+      if (!already) { await saveViaBar(page); await page.waitForSelector('.saved-flag', { timeout: 10000 }); }
     };
     const openSync = async (page, mobile) => {
       // 已经开着就别再点一次：面板开着时侧栏被遮罩挡住，再点只会等到超时

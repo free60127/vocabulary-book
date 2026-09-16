@@ -1,5 +1,6 @@
 import React from 'react';
 import { RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 const REASON_LABEL = { forgot: '复习时忘了', spell: '拼写错了', reveal: '看了答案' };
@@ -12,11 +13,12 @@ const REASON_LABEL = { forgot: '复习时忘了', spell: '拼写错了', reveal:
  * 两个动作：**只练这些**（不动排期，练完按表现进出本）、**移出**（这个坎过去了）。
  */
 export default function WrongBookModal({ items, onClose, onPractice, onRemove, onClearAll }) {
+  const trapRef = useFocusTrap();
   useEscape(onClose);
   const inBook = items.filter((x) => x.exists).length;
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal wrong-modal" role="dialog" aria-modal="true" aria-label="错词本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal wrong-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="错词本" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2>错词本（{items.length}）</h2>
           <button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>

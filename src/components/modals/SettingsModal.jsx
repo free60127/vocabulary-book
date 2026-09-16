@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 import { THEMES } from '../../theme.js';
 
@@ -8,12 +9,13 @@ import { THEMES } from '../../theme.js';
  * 留空 = 用服务端 .env 里的配置；填了只存在本机浏览器（Key 不会上传）。
  */
 export default function SettingsModal({ settings, theme = 'system', onThemeChange, onClose, onSave }) {
+  const trapRef = useFocusTrap();
   const [form, setForm] = useState({ baseUrl: '', model: '', apiKey: '', ...settings });
   useEscape(onClose);
   const field = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="AI 设置" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="AI 设置" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>AI 接入设置</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <label>外观
           <select className="ocr-mode" value={theme} onChange={(e) => onThemeChange && onThemeChange(e.target.value)} style={{ marginLeft: 8 }}>

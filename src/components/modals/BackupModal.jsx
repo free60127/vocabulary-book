@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Cloud, Download, LogIn, Upload, X } from 'lucide-react';
 import { mergeSnapshot } from '../../storage.js';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 /**
@@ -16,6 +17,7 @@ export default function BackupModal({
   syncCode, syncTip, syncBusy, onNewCode, onUseCode, onCopyCode, onStopSync, onSyncNow, onForcePush,
   syncMeta, account, accountHasSync, onOpenAuth, onBindSync, onPullSync, localSnapshot,
 }) {
+  const trapRef = useFocusTrap();
   const [codeInput, setCodeInput] = useState('');
   const [binding, setBinding] = useState(false);   // 是否展开"输入密码以绑定同步码"
   const [bindPw, setBindPw] = useState('');
@@ -25,7 +27,7 @@ export default function BackupModal({
   useEscape(onClose);
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal backup-modal" role="dialog" aria-modal="true" aria-label="备份与恢复" onClick={(e) => e.stopPropagation()}>
+      <div className="modal backup-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="备份与恢复" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>备份与恢复</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <p className="muted small">单词本、复习排期、学习天数都只存在本机浏览器里：换设备、换浏览器、清缓存都会丢。</p>
         <div className="lib-preview">

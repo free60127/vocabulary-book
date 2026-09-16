@@ -67,3 +67,36 @@ export function MergeBookModal({ from, books, onClose, onSubmit }) {
     </div>
   );
 }
+
+/**
+ * 新建单词本的命名弹窗。
+ *
+ * 为什么不再用 window.prompt（可用性审计实测）：
+ *  · 手机上系统 prompt 会被键盘顶掉一半，样式也无法控制；
+ *  · 部分内嵌 WebView / 隐私模式会**直接拦截** prompt，返回 null；
+ *  · 而原来的代码在拿到 null 时是"静默什么都不做" —— 用户点了「新建单词本并加入」，
+ *    界面上一点反应都没有，只能以为按钮坏了。
+ * 现在有正经界面：输入框默认带一个名字，回车即建，取消有明确反馈。
+ */
+export function NewBookModal({ defaultValue = '我的单词本', onSubmit, onClose, hint }) {
+  const [name, setName] = useState(defaultValue);
+  useEscape(onClose);
+  const clean = name.trim();
+  return (
+    <div className="modal-mask" onClick={onClose}>
+      <div className="modal rename-modal" role="dialog" aria-modal="true" aria-label="新建单词本" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head"><h2>新建单词本</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
+        <label>单词本名字
+          <input value={name} autoFocus maxLength={80}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && clean) onSubmit(clean); }} />
+        </label>
+        <p className="muted small">{hint || '建好之后，查词时在卡片底部选它就能存进去。'}</p>
+        <div className="modal-actions">
+          <button className="ghost-btn" onClick={onClose}>取消</button>
+          <button className="primary-btn" onClick={() => onSubmit(clean)} disabled={!clean}>新建</button>
+        </div>
+      </div>
+    </div>
+  );
+}

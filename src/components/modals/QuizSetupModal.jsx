@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sparkles, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 /**
@@ -8,10 +9,11 @@ import { useEscape } from '../../hooks/useEscape.js';
 export default function QuizSetupModal({
   activeBook, totalEntries, counts, scope, setScope, count, setCount, onStart, onClose,
 }) {
+  const trapRef = useFocusTrap();
   useEscape(onClose);
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="生成自测题" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="生成自测题" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>生成自测题</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <p className="muted small">围绕单词本里的词条出题，题型混搭：词义辨析 / 填空 / 中译英 / 改错 / 用法判断。</p>
         <label>出题范围

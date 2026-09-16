@@ -89,6 +89,35 @@ export function useBooks({ flash }) {
     };
   }, []);
 
+  /**
+   * 另一个标签页改了本机数据 → 跟着刷新。
+   *
+   * 审计发现的真实场景：同一个浏览器开两个标签页（很常见：一个查词一个复习），
+   * 在 A 里加了词条，B 的界面不会变 —— 因为 localStorage 的改动不会跨标签页通知 React 状态。
+   * `storage` 事件只在**其它**标签页触发（正是我们要的），收到就整份重读。
+   */
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (!e.key || !e.key.startsWith('vb-')) return;
+      // 只重读这几个"另一个标签页可能改了"的集合；重读是幂等的，也不会回写
+      setBooks(loadBooks());
+      setSchedule(loadSchedule());
+      setDays(loadDays());
+      setHistory(loadHistory());
+      setFavorites(loadFavorites());
+      setKilled(loadKilled());
+      setRevived(loadRevived());
+      setWrong(loadWrong());
+      setSentences(loadSentences());
+      setDeletedBooks(loadDeletedBooks());
+      setDeletedEntries(loadDeletedEntries());
+      setDeletedFavorites(loadDeletedFavorites());
+      setDeletedSentences(loadDeletedSentences());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   /* 今日待复习 = 本子里到期的词条 + 收藏夹里还没收进本子的词（斩掉的除外） */
   const due = useMemo(
     () => buildReviewQueue({ entries, favorites, schedule, killed, revived }),

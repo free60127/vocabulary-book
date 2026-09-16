@@ -94,7 +94,6 @@ body.drawer-open { overflow: hidden; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.result { flex: 1; overflow-y: auto; padding: 18px; }
 .result-toolbar { max-width: 960px; margin: 0 auto 14px; display: flex; gap: 8px; }
 .sheet { max-width: 960px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 32px 38px; }
 .sheet-title { border-bottom: 2px solid var(--brand); padding-bottom: 14px; margin-bottom: 22px; }
@@ -172,8 +171,6 @@ body.drawer-open { overflow: hidden; }
   /* 手机上只留「AI 已配置」：模型名（deepseek-chat）与课数对学习者是无意义噪音，还占一整行 */
   .status-chip .chip-detail { display: none; }
 
-  /* 结果页操作栏：2 列网格，按钮占满半宽 */
-  .result { padding: 10px 8px; }
   .result-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-width: none; width: 100%; margin: 0 auto 12px; }
   .result-toolbar .ghost-btn { justify-content: center; width: 100%; padding: 10px 8px; font-size: 13px; }
 
@@ -196,10 +193,6 @@ body.drawer-open { overflow: hidden; }
   .sidebar, .topbar, .result-toolbar, .modal-mask { display: none !important; }
   body { background: #fff !important; color: #1c2733 !important; }
   html, body, #root, .app, .main, .result, .sheet, .sheet-section { background: #fff !important; }
-  /* 这里原本还有一条 .editor { display: none }：但编辑视图与结果视图是互斥渲染的
-     （view === 'editor' ? <section.editor> : <section.result>），所以在编辑页按下 Ctrl+P
-     会把唯一的内容隐藏掉，打印出一张白纸。去掉它，编辑页也能正常打印。 */
-  .result { display: block !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; }
   .sheet { border: none !important; box-shadow: none !important; max-width: none !important; border-radius: 0 !important; padding: 0 !important; }
   .sheet-section { break-inside: auto !important; page-break-inside: auto !important; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -258,8 +251,6 @@ body.drawer-open { overflow: hidden; }
   .panel-head { flex-wrap: wrap; }
 }
 
-.timer-box.running { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(31, 111, 235, .12); color: var(--brand); }
-.timer-box.running .timer-display { color: var(--brand); }
 .timer-box .ghost-btn.sm:disabled { opacity: .45; cursor: not-allowed; }
 
 /* 音标（词汇深度辨析） */
@@ -835,8 +826,6 @@ body.drawer-open { overflow: hidden; }
 
 /* ---------- 卡片头部的工具区 ---------- */
 .review-head-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.spell-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-.spell-switch input { width: 16px; height: 16px; accent-color: var(--brand); }
 @media (pointer: coarse) { .spell-switch { min-height: 44px; } .spell-switch input { width: 20px; height: 20px; } }
 
 /* ---------- 拼写模式 ---------- */
@@ -952,8 +941,6 @@ body.drawer-open { overflow: hidden; }
   .chip-btn { min-height: 40px; }
 }
 
-/* 版本号：小到不打扰，但需要时能找到 */
-.build-id { font-size: 11px; color: var(--muted); opacity: .85; }
 
 /* ---------- 数据安全横幅 ----------
    数据只在本机浏览器里，而"清缓存/换浏览器"是常规操作：真实事故是用户清完数据丢了
@@ -1203,3 +1190,18 @@ body.drawer-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .dot.wait { animation: none; } }
 /* 它能点了，就得有够大的热区（可用性审计会拦 28×22 这种） */
 @media (pointer: coarse) { .status-chip { min-height: 44px; min-width: 44px; justify-content: center; padding: 6px 14px; } }
+
+/* ---------- 键盘焦点可见 ----------
+   审计发现：整个样式表里没有一条 :focus-visible 规则，而我为了视觉效果在几个输入框上
+   `outline: none`（只靠边框变色）—— 键盘用户因此**看不出焦点在哪**。
+   统一补一条：键盘导航（:focus-visible 只在键盘/读屏时命中）才画环，鼠标点击不画。 */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* 输入框自己已经有边框高亮，不需要再套一层环，避免双重描边 */
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 1px; }
+
+/* 「更多」菜单里的版本行：等宽 + 淡一点，不抢状态行的注意力 */
+.more-menu-info .menu-build { opacity: .75; font-variant-numeric: tabular-nums; }

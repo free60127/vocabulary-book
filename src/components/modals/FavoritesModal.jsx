@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, BookPlus, Star, Trash2, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 /**
@@ -11,12 +12,13 @@ import { useEscape } from '../../hooks/useEscape.js';
  * 允许"先查再加入"是刻意的：本子里存的应该是完整卡片，塞半成品进去只会把本子搞脏。
  */
 export default function FavoritesModal({ favorites, books, busy, onClose, onRemove, onAddToBook, onLookup }) {
+  const trapRef = useFocusTrap();
   const [bookId, setBookId] = useState(books[0]?.id || '');
   useEscape(onClose);
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal favorites-modal" role="dialog" aria-modal="true" aria-label="收藏夹" onClick={(e) => e.stopPropagation()}>
+      <div className="modal favorites-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="收藏夹" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2>收藏夹（{favorites.length}）</h2>
           <button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>

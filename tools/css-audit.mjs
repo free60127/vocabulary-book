@@ -40,9 +40,12 @@ const src = collectSource();
 
 // 动态拼接：`'cat-' + tone`、`grade-${tone}` —— 这类前缀下面的类都算"可能被用到"
 const dynPrefixes = new Set([
-  ...[...src.matchAll(/['"`]([a-zA-Z][\w-]*-)['"`]\s*\+/g)].map((m) => m[1]),
-  ...[...src.matchAll(/`([a-zA-Z][\w-]*-)\$\{/g)].map((m) => m[1]),
-  ...[...src.matchAll(/'([a-zA-Z][\w-]*-)'\s*\+/g)].map((m) => m[1]),
+  // `'sentence-grade tone-' + x`、`'cat-' + tone` 这类：整段字面量里**最后一个词**才是动态前缀
+  // （早期只认"字面量本身就是前缀"，于是 'tone-' 'kind-' 被漏掉，工具报出一堆假死类）
+  ...[...src.matchAll(/['"`]([^'"`]*?)['"`]\s*\+/g)]
+    .map((m) => m[1].trim().split(/\s+/).pop())
+    .filter((t) => /^[a-zA-Z][\w-]*-$/.test(t)),
+  ...[...src.matchAll(/`([^`]*?)([a-zA-Z][\w-]*-)\$\{/g)].map((m) => m[2]),
 ]);
 
 const isUsed = (c) => {

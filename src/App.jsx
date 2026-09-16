@@ -35,7 +35,7 @@ import FavoritesModal from './components/modals/FavoritesModal.jsx'
 import SettingsModal from './components/modals/SettingsModal.jsx'
 import QuizSetupModal from './components/modals/QuizSetupModal.jsx'
 import PrintHintModal from './components/modals/PrintHintModal.jsx'
-import { MergeBookModal, RenameBookModal } from './components/modals/RenameBookModal.jsx'
+import { MergeBookModal, NewBookModal, RenameBookModal } from './components/modals/RenameBookModal.jsx'
 import KilledModal from './components/modals/KilledModal.jsx'
 import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
@@ -412,6 +412,12 @@ export default function App() {
   const runLookup = async (term, { saveToBookId } = {}) => {
     const q = String(term || '').trim()
     if (!q) { setError('请先输入要查的单词或短语'); return }
+    // 长度上限：查词是"一个词/短语"，不是整段文字。超长直接说清楚，
+    // 而不是把它发给模型等半天（审计里 500 字中文会白等一轮）
+    if (q.length > 120) {
+      setError('输入太长了（' + q.length + ' 个字符）—— 查词一次只处理一个词或短语，请截短到 120 字以内')
+      return
+    }
     // 中文输入 → 先给候选词（中文词与英文词不是一一对应，直接讲解会得到自相矛盾的卡片）
     if (hasCJK(q)) { await runZhLookup(q); return }
     setError(''); setBusy(true); setEntry(null); setProgress('正在提交…')
@@ -563,23 +569,32 @@ export default function App() {
     flash((replaced ? '已更新：' : '已加入「' + bookName + '」：') + entry.head, TIP_LONG_MS)
     setActiveBookId(bookId)
   }
-  /** 问名字并归一化；返回 null 表示用户取消或给了空名字（两种情况都不该有副作用） */
-  const askBookName = () => {
-    const raw = window.prompt('新建单词本的名字', '我的单词本')
-    if (raw === null) return null                 // 点了"取消"：什么都不做才是对的
-    const name = raw.trim()
-    // 空名字以前是静默 return —— 用户按了按钮，界面上一点反应都没有。
-    if (!name) { flash('名字不能为空，没有新建', TIP_LONG_MS); return null }
-    return name
-  }
+  /**
+   * 问本子名字（应用内弹窗，Promise 化）。
+   *
+   * 以前用 window.prompt：手机上被键盘顶掉、内嵌 WebView 里会被直接拦截，
+   * 而拦截后返回 null、代码静默什么都不做 —— 用户点「新建单词本并加入」毫无反应（审计实测）。
+   * 取消时给一句反馈，用户才知道"是取消了"而不是"按钮坏了"。
+   */
+  const [nameAsk, setNameAsk] = useState(null)
+  const askBookName = (hint) => new Promise((resolve) => {
+    setNameAsk({
+      hint,
+      resolve: (name) => {
+        setNameAsk(null)
+        if (name === null) { flash('已取消，没有新建单词本', TIP_NORMAL_MS); resolve(null); return }
+        resolve(name)
+      },
+    })
+  })
   /**
    * 侧栏的「新建单词本」= **只建一个空本子**。
    * 这里曾经走的是"新建并把当前卡片存进去"（等于卡片上那颗按钮）——
    * 结果用户只是想建个本子，手里那张卡却被悄悄存了一份（实测：同一个词因此出现在两个本子里，
    * 复习排期也跟着裂成两份）。按钮名字说什么，就只做什么。
    */
-  const createBookOnly = () => {
-    const name = askBookName()
+  const createBookOnly = async () => {
+    const name = await askBookName()
     if (!name) return
     const same = books.find((b) => b.name === name)
     if (same) { flash('已经有叫「' + name + '」的本子了', TIP_LONG_MS); return }
@@ -587,8 +602,8 @@ export default function App() {
     flash('已新建「' + name + '」—— 查词时在卡片底部选它就能存进去', TIP_LONG_MS)
   }
   /** 卡片上的「新建单词本并加入」：建 + 把当前这张卡存进去 */
-  const createAndSave = () => {
-    const name = askBookName()
+  const createAndSave = async () => {
+    const name = await askBookName('建好后会把「' + ((entry && entry.head) || '这个词') + '」直接存进去。')
     if (!name) return
     // 同名时复用已有的本子：重名本子在侧边栏里长得一模一样，用户分不清哪个是哪个
     const same = books.find((b) => b.name === name)
@@ -1086,6 +1101,12 @@ export default function App() {
           counts={QUIZ_COUNTS} scope={quizScope} setScope={setQuizScope}
           count={quizCount} setCount={setQuizCount}
           onStart={runQuiz} onClose={() => setQuizSetupOpen(false)} />
+      ) : null}
+
+      {nameAsk ? (
+        <NewBookModal hint={nameAsk.hint}
+          onSubmit={(name) => nameAsk.resolve(name)}
+          onClose={() => nameAsk.resolve(null)} />
       ) : null}
 
       {renameTarget ? (

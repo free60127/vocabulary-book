@@ -1,5 +1,6 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 /**
@@ -9,10 +10,11 @@ import { useEscape } from '../../hooks/useEscape.js';
  * ⋮ 菜单里。不先说清楚，用户只会看到一个"未选择打印机"的界面，以为功能坏了。
  */
 export default function PrintHintModal({ onCancel, onContinue }) {
+  const trapRef = useFocusTrap();
   useEscape(onCancel);
   return (
     <div className="modal-mask" onClick={onCancel}>
-      <div className="modal print-hint-modal" role="dialog" aria-modal="true" aria-label="导出 PDF" onClick={(e) => e.stopPropagation()}>
+      <div className="modal print-hint-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="导出 PDF" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>导出 PDF</h2><button className="icon-btn" onClick={onCancel} aria-label="关闭"><X size={16} /></button></div>
         <p>接下来会打开系统的打印界面。<b>手机上系统默认没有打印机</b>，保存成文件的入口在右上角：</p>
         <ol className="print-hint-steps">

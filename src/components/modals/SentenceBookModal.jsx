@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { NotebookPen, Trash2, Volume2, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 import { speak } from '../../speak.js';
 
@@ -14,12 +15,13 @@ import { speak } from '../../speak.js';
  * 所以这里不做任何自动进出，只提供：看、朗读、再练一次这个词、删。
  */
 export default function SentenceBookModal({ items, onClose, onDelete, onPracticeWord }) {
+  const trapRef = useFocusTrap();
   useEscape(onClose, true);
   const [openId, setOpenId] = useState('');
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal sentence-book" role="dialog" aria-label="错句本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal sentence-book" role="dialog" ref={trapRef} aria-label="错句本" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3><NotebookPen size={16} />错句本{items.length ? `（${items.length}）` : ''}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>

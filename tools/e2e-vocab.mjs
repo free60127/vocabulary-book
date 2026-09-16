@@ -124,6 +124,11 @@ try {
   /* ---------- 加入单词本 ---------- */
   // 用 .primary-btn 限定：保存栏里现在还多了「导出 PDF」，选择器太宽会撞上 Playwright 的严格模式
   await page.locator('.save-bar .primary-btn').click();
+  // 全新安装时保存栏是「新建单词本并加入」：现在走应用内弹窗（不再是 window.prompt）
+  if (await page.locator('.rename-modal').count()) {
+    await page.locator('.rename-modal input').fill('我的单词本');
+    await page.locator('.rename-modal .primary-btn').click();
+  }
   await page.waitForSelector('.saved-flag', { timeout: 10000 });
   const afterSave = await page.evaluate(() => ({
     flag: document.querySelector('.saved-flag')?.textContent.trim(),

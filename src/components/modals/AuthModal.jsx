@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 import { X } from 'lucide-react';
 import { validateCredentials } from '../../account.js';
@@ -14,6 +15,7 @@ export default function AuthModal({
   config, account, busy, tip, onClose,
   onSignIn, onSignUp, onSignOut, onSignOutAll, onForgot, onReset, onDeleteAccount, onChangePassword,
 }) {
+  const trapRef = useFocusTrap();
   const [mode, setMode] = useState('login');       // login | register | forgot | reset | change
   const [form, setForm] = useState({ email: '', password: '', code: '', newPassword: '' });
   const [localErr, setLocalErr] = useState('');
@@ -38,7 +40,7 @@ export default function AuthModal({
 
   return (
     <div className="modal-mask auth-mask" onClick={onClose}>
-      <div className="modal auth-modal" role="dialog" aria-modal="true" aria-label="账号" onClick={(e) => e.stopPropagation()}>
+      <div className="modal auth-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="账号" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>账号</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
 
         {!config?.enabled ? (

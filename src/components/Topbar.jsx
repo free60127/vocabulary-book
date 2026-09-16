@@ -103,6 +103,8 @@ export default function Topbar({
               <span className={'dot ' + (status ? 'ok' : statusChecking ? 'wait' : 'bad')} />
               <span>{statusText}</span>
               <em>{stats.entries} 个词条 · 连续 {streak.current} 天{syncCode ? ` · 同步 ${lastSyncAt ? new Date(lastSyncAt).toTimeString().slice(0, 5) : '未同步'}` : ''}</em>
+              {/* 版本号放这里最顺手：用户问"我这是哪一版"时第一眼看的就是这个菜单 */}
+              <em className="menu-build">版本 {typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev'}</em>
             </div>
           </div>
         ) : null}

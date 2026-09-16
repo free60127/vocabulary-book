@@ -1,5 +1,6 @@
 import React from 'react';
 import { RotateCcw, Skull, X } from 'lucide-react';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
 
 /**
@@ -10,10 +11,11 @@ import { useEscape } from '../../hooks/useEscape.js';
  * 用户唯一的办法是把这个词删掉再重查一遍 —— 而那会把复习进度一起清掉。
  */
 export default function KilledModal({ items, onClose, onRevive, onReviveAll }) {
+  const trapRef = useFocusTrap();
   useEscape(onClose);
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal killed-modal" role="dialog" aria-modal="true" aria-label="已斩掉的词" onClick={(e) => e.stopPropagation()}>
+      <div className="modal killed-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="已斩掉的词" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2>已斩掉的词（{items.length}）</h2>
           <button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>
