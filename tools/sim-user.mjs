@@ -1071,6 +1071,36 @@ async function runEdgeCases(browser) {
     await ctx.close();
   }
 
+  /* ②d 跨天自动翻篇：昨晚复习的词，今天零点起就该出现（不用刷新页面） */
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(() => {
+      const night = new Date(2026, 8, 15, 21, 0, 0).getTime();   // 9/15 21:00 复习
+      const due = night + 24 * 3600 * 1000;                     // 到期 9/16 21:00
+      localStorage.setItem('vb-books', JSON.stringify([{
+        id: 'bk-1', name: '书', note: '', createdAt: night,
+        entries: [{ id: 'wb-1', head: 'object', kind: 'word', brief: '物体', meanings: [{ cn: '物体' }], createdAt: night }],
+      }]));
+      localStorage.setItem('vb-schedule', JSON.stringify({ 'wb-1': { ease: 2.5, interval: 1, due, reps: 1, lapses: 0, lastReviewed: night, lastGrade: 'normal' } }));
+    });
+    const page = await ctx.newPage();
+    await page.clock.install({ time: new Date(2026, 8, 15, 23, 50, 0) });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.waitForTimeout(300);
+    const before = (await page.locator('.due-btn').innerText()).replace(/\s+/g, ' ').trim();
+    check(P, '23:50 时昨晚刚复习的词还没到期', /待复习$/.test(before) && !/\d/.test(before), before);
+    await page.clock.fastForward('20:00');                     // 拨到 9/16 00:10
+    await page.waitForTimeout(1200);
+    const after = await page.evaluate(() => ({
+      due: document.querySelector('.due-btn').textContent.replace(/\s+/g, ' ').trim(),
+      now: new Date().toISOString().slice(0, 16),
+    }));
+    check(P, '跨过 00:00 不用刷新就翻篇（新的词进今日待复习）', /\(1\)/.test(after.due), `${after.due} · 页面时间 ${after.now}`);
+    await page.screenshot({ path: path.join(SHOTS, 'midnight-rollover.png') }).catch(() => {});
+    await ctx.close();
+  }
+
   /* ②c 手机端侧栏（数据饱满时）：本子列表被压扁 = "看不到我的单词本" */
   {
     const ctx = await browser.newContext({ ...devices['iPhone SE'] });   // 最小屏最容易复现

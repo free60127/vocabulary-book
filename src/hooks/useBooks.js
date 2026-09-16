@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   loadBooks, loadDays, loadDeletedBooks, loadDeletedEntries, loadHistory,
   loadDeletedFavorites, loadFavorites, loadKilled, loadRevived, loadSchedule, loadWrong,
@@ -11,8 +11,8 @@ import {
   summarizeBooks, upsertEntry,
 } from '../wordbook.js';
 import {
-  addStudyDay, addWrong, buildReviewQueue, buildWrongQueue, clearWrong, headKey, scheduleOf,
-  sm2Review, summarizeStreak, wrongList,
+  addStudyDay, addWrong, buildReviewQueue, buildWrongQueue, clearWrong, dayKey, headKey,
+  scheduleOf, sm2Review, summarizeStreak, wrongList,
 } from '../review.js';
 import { addFavorite, attachEntryToFavorite, findFavorite, removeFavorite } from '../favorites.js';
 import { TIP_LONG_MS, TIP_NORMAL_MS } from '../constants.js';
@@ -62,10 +62,33 @@ export function useBooks({ flash }) {
   const entries = useMemo(() => allEntries(books), [books]);
   const stats = useMemo(() => summarizeBooks(books), [books]);
   const streak = useMemo(() => summarizeStreak(days), [days]);
+  /**
+   * "今天是哪天"是会变的：页面可能整夜开着（手机加到主屏后更是长期驻留）。
+   * 这里每 30 秒对一次本地日期，跨过 00:00 就让它变一次 → 下面的 due 重算。
+   * 用户的原话："这个我昨天晚上复习的，今天早上没刷新" —— 不刷新也该是新的一天。
+   */
+  const [today, setToday] = useState(() => dayKey(Date.now()));
+  useEffect(() => {
+    const check = () => {
+      const k = dayKey(Date.now());
+      setToday((prev) => (prev === k ? prev : k));
+    };
+    const timer = setInterval(check, 30_000);
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('focus', check);
+    };
+  }, []);
+
   /* 今日待复习 = 本子里到期的词条 + 收藏夹里还没收进本子的词（斩掉的除外） */
   const due = useMemo(
     () => buildReviewQueue({ entries, favorites, schedule, killed, revived }),
-    [entries, favorites, schedule, killed, revived],
+    // today 只是"跨天"的信号：它变了就重算（届时 now 已经是新的一天）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entries, favorites, schedule, killed, revived, today],
   );
   /** 错词本清单（带释义与"还在不在本子里"），给界面和"只练错词"用 */
   const wrongItems = useMemo(() => wrongList(wrong, entries, favorites), [wrong, entries, favorites]);

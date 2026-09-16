@@ -93,22 +93,51 @@ export function scheduleOf(map, entryId, createdAt = 0, now = Date.now()) {
   return normalizeSchedule(raw || newSchedule(createdAt || now), createdAt, now);
 }
 
+/* ---------- 日期口径 ---------- */
+
+/** 本地日期键 YYYY-MM-DD（连续天数、跨天判定共用） */
+const dayKey = (ts) => {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
+export { dayKey };
+
+/**
+ * 到期判定用**天**，不用精确时刻。
+ *
+ * 为什么：SM-2 把下次到期算成 `上次复习 + 间隔 × 24h` —— 昨晚 21:00 复习、间隔 1 天的词，
+ * 到期时间是**今晚 21:00**，于是用户今天早上打开，「今日待复习」还是空的。
+ * 直觉上"今天该背的词，今天零点就该出现"（百词斩 / Anki 都是这个语义）。
+ * 改成比较日期：`到期日 ≤ 今天` 就算到期，每天 00:00 自然翻篇。
+ * （精确的 due 时间戳仍然保留：逾期排序、下次到期显示都还用它。）
+ */
+export function isDueOn(due, now = Date.now()) {
+  const d = Number(due) || 0;
+  if (!d) return true;                      // 没有排期 = 新词，立刻可复习
+  return d <= now || dayKey(d) <= dayKey(now);
+}
+
 /** 今天该复习的词条（按"拖得最久"排序，最该先复习的排前面） */
 export function dueEntries(entries, map, now = Date.now()) {
   return (Array.isArray(entries) ? entries : [])
     .filter((e) => e && e.id)
     .map((e) => ({ entry: e, schedule: scheduleOf(map, e.id, e.createdAt, now) }))
-    .filter((x) => x.schedule.due <= now)
+    .filter((x) => isDueOn(x.schedule.due, now))
     .sort((a, b) => a.schedule.due - b.schedule.due);
 }
 
-/** 下一次复习在什么时候（用来显示"明天还有 N 个"） */
+/**
+ * 下一次复习在什么时候（用来显示"下一次是哪天"）。
+ * 与 isDueOn 同一套口径：今天已到期的都不算，取下一个**日期**比今天晚的排期
+ * （否则会出现"提示今晚 21:00，可它 00:00 就已经进队列了"）。
+ */
 export function nextDueAt(entries, map, now = Date.now()) {
   let min = Infinity;
   for (const e of Array.isArray(entries) ? entries : []) {
     if (!e || !e.id) continue;
     const due = scheduleOf(map, e.id, e.createdAt, now).due;
-    if (due > now && due < min) min = due;
+    if (!isDueOn(due, now) && due < min) min = due;
   }
   return Number.isFinite(min) ? min : 0;
 }
@@ -140,12 +169,6 @@ export function mergeSchedules(local, incoming) {
 
 /* ---------- 连续学习天数 ---------- */
 
-const dayKey = (ts) => {
-  const d = new Date(ts);
-  const p = (n) => String(n).padStart(2, '0');
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-};
-export { dayKey };
 
 /** 记一天（去重、只留最近 400 天） */
 export function addStudyDay(days, ts = Date.now()) {
@@ -245,7 +268,7 @@ export function buildReviewQueue({ entries, favorites, schedule, killed, revived
     if (dead.has(key) || bookHeads.has(key)) continue;   // 斩掉的 / 已经在单词本里的，都不重复进
     out.push({ key: f.id, kind: 'favorite', head: f.head, phonetic: f.phonetic || '', favorite: f, schedule: scheduleOf(schedule, f.id, f.at || 0, now) });
   }
-  return out.filter((x) => x.schedule.due <= now).sort((a, b) => a.schedule.due - b.schedule.due);
+  return out.filter((x) => isDueOn(x.schedule.due, now)).sort((a, b) => a.schedule.due - b.schedule.due);
 }
 
 /**

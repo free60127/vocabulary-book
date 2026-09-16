@@ -8,7 +8,7 @@
  */
 import {
   EASE_MAX, EASE_MIN, GRADES, INTERVAL_MAX, addStudyDay, addWrong, buildReviewQueue, buildWrongQueue,
-  checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, killedSet, mergeDays,
+  checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, isDueOn, killedSet, mergeDays,
   mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
   spellHint, summarizeStreak, wrongList,
 } from '../src/review.js';
@@ -267,6 +267,44 @@ const failed = results.filter((r) => !r.ok);
   const msg = buildFollowupMessage({ head: 'object', brief: '物体', pos: '名词', question: '怎么选？', context: 'object to sth' });
   check('追问消息带上词、释义、上下文与问题',
     msg.includes('object') && msg.includes('物体') && msg.includes('object to sth') && msg.includes('怎么选？'), msg.slice(0, 40));
+}
+
+
+/* ==========================================================================
+   到期判定按"天"：昨晚 21:00 复习、间隔 1 天的词，今天零点就该出现
+   （原来是精确时刻：到期时间 = 今晚 21:00，于是用户今天早上看到的是"今天没有要复习的"）
+   ========================================================================== */
+{
+  const night = new Date(2026, 8, 15, 21, 0, 0).getTime();      // 9/15 21:00 复习
+  const morning = new Date(2026, 8, 16, 9, 0, 0).getTime();     // 9/16 09:00 打开
+  const noon = new Date(2026, 8, 16, 12, 0, 0).getTime();
+  const DAYms = 24 * 60 * 60 * 1000;
+  const entry = { id: 'wb-1', head: 'object', createdAt: night };
+  const map = (due) => ({ 'wb-1': { ease: 2.5, interval: 1, due, reps: 1, lapses: 0, lastReviewed: night, lastGrade: 'normal' } });
+
+  check('间隔 1 天（到期今晚 21:00）→ 今天早上就算到期', isDueOn(night + DAYms, morning) === true,
+    new Date(night + DAYms).toLocaleString('zh-CN'));
+  check('间隔 2 天（到期明晚）→ 今天不算到期', isDueOn(night + 2 * DAYms, morning) === false);
+  check('昨天就该复习的（逾期）当然到期', isDueOn(night - 3 * DAYms, morning) === true);
+  check('没有排期（新词）立刻到期', isDueOn(0, morning) === true);
+  check('今天 23:59 到期 → 今天零点起就在队列里', isDueOn(new Date(2026, 8, 16, 23, 59, 0).getTime(), morning) === true);
+
+  check('dueEntries 用同一套判定', dueEntries([entry], map(night + DAYms), morning).length === 1);
+  check('明天到期的词今天不进队列', dueEntries([entry], map(night + 2 * DAYms), morning).length === 0);
+  check('队列按"拖得最久"排：逾期的在前', (() => {
+    const two = [{ id: 'a', head: 'a', createdAt: night }, { id: 'b', head: 'b', createdAt: night }];
+    const m = { a: { due: night + 2 * DAYms }, b: { due: night - DAYms } };
+    return dueEntries(two, m, morning)[0].entry.id === 'b';
+  })());
+
+  // 下午再打开：上午已经复习过（间隔 1 天 → 明天到期），今天不该再出现
+  const reviewedToday = { 'wb-1': { ease: 2.5, interval: 1, due: morning + DAYms, reps: 2, lastReviewed: morning, lastGrade: 'normal' } };
+  check('今天复习过的词，今天不会又冒出来', dueEntries([entry], reviewedToday, noon).length === 0);
+
+  check('nextDueAt 跳过今天已到期的，取下一个日期',
+    dayKey(nextDueAt([entry], map(night + 2 * DAYms), morning)) === '2026-09-17',
+    new Date(nextDueAt([entry], map(night + 2 * DAYms), morning)).toLocaleString('zh-CN'));
+  check('今天已到期的词不算"下一次"', nextDueAt([entry], map(night + DAYms), morning) === 0);
 }
 
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
