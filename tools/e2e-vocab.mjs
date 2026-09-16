@@ -262,6 +262,11 @@ try {
 
   /* ---------- ③ 复习 ---------- */
   await page.locator('.due-btn').click();
+  // 现在进复习先选模式（复习 / 拼写），选完再开始
+  await page.waitForSelector('.review-setup', { timeout: 8000 });
+  ok('进复习先出模式选择（复习 / 拼写）', (await page.locator('.review-setup .mode-card').count()) === 2);
+  await page.locator('.review-setup .mode-card', { hasText: '复习模式' }).click();
+  await page.locator('.review-setup .primary-btn').click();
   await page.waitForSelector('.review-word', { timeout: 8000 });
   ok('今日待复习 能进入复习', (await page.locator('.review-word strong').innerText()).length > 0, await page.locator('.review-word strong').innerText());
   ok('翻面前不显示答案', (await page.locator('.review-answer').count()) === 0);

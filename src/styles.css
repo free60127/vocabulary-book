@@ -1178,3 +1178,16 @@ body.drawer-open { overflow: hidden; }
   .zh-item { grid-template-columns: auto auto 1fr auto; }
   .zh-cn { grid-column: 1 / -1; }
 }
+
+/* ---------- 复习模式选择 / 轮内换模式 ---------- */
+.review-setup { display: flex; flex-direction: column; gap: 12px; }
+.mode-card strong { display: flex; align-items: center; gap: 6px; }
+.mode-switch { display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.mode-chip {
+  padding: 4px 12px; font-size: 12.5px; border: 0; background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.mode-chip:hover { color: var(--brand); }
+.mode-chip.active { background: var(--brand); color: #fff; }
+/* 手机上热区要够 44px：这是切换整轮模式的动作，点错代价高（实测审计会拦） */
+@media (pointer: coarse) { .mode-chip { min-height: 44px; padding: 4px 16px; } }

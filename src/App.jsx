@@ -42,6 +42,7 @@ import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 import ZhPicker from './components/ZhPicker.jsx'
+import ReviewSetup from './components/ReviewSetup.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -130,18 +131,12 @@ export default function App() {
   const [followups, setFollowups] = useState(loadFollowups)
   const [askBusy, setAskBusy] = useState(false)
   const [askError, setAskError] = useState('')
-  /* 拼写模式：开关记在本机（换设备不跟走 —— 它更像"这台设备怎么练"而不是数据） */
-  const [spell, setSpell] = useState(loadSpell)
-  /* 拼写练习（过完一轮之后的加练）：只练不写排期 */
+  /* 复习模式：review（看词回想评分）/ spell（看中文释义拼出单词）。记在本机，下次默认还是它。 */
+  const [reviewMode, setReviewMode] = useState(() => (loadSpell() ? 'spell' : 'review'))
+  /** 选好模式之前的"待开始队列"（due 或今日加练），确认模式后才成为 reviewQueue */
+  const [pendingQueue, setPendingQueue] = useState(null)
+  /* 练习轮（拼写 / 错词 / 今日加练）：只练不写排期 */
   const [practice, setPractice] = useState(false)
-  /**
-   * 当前这一轮是否已经进入"拼写阶段"。
-   * 与 spell（用户的勾选）分开：**勾选只是预约** —— 本轮照常翻面评分，做完再从第 1 个开始拼写。
-   * 之前把两者合成一个，勾上的瞬间当前这张卡就变成拼写题、之后一路拼过去，
-   * 用户的原话是"不是现在开启后就变成拼写，然后拼一个过一个"。
-   */
-  const [spellRun, setSpellRun] = useState(false)
-  /** 这一轮是什么：due（今天的复习）/ today（今日加练）/ wrong（错词练习） */
   const [reviewKind, setReviewKind] = useState('due')
   /* ---------- 造句练习 ---------- */
   const [sentenceMode, setSentenceMode] = useState('free')   // free | translate
@@ -238,7 +233,7 @@ export default function App() {
       else mq.removeListener(onChange)
     }
   }, [theme])
-  useEffect(() => { saveSpell(spell) }, [spell])
+  useEffect(() => { saveSpell(reviewMode === 'spell') }, [reviewMode])
   useEffect(() => { saveFollowups(followups) }, [followups])
 
   /* 搜索框自动聚焦：**只在桌面端**。
@@ -640,20 +635,51 @@ export default function App() {
    *    想临时补一遍拼写都没有入口（用户反馈）。
    *  · 今天一个词都没碰过 → 才是真的没得练，给提示。
    */
+  /**
+   * 点「今日待复习」→ **先选模式**（复习 / 拼写），选完直接按那个模式跑整轮。
+   *
+   * 为什么不是"进去之后再勾选"：勾选式的即时切换会把手里的卡当场变成拼写题（用户不接受），
+   * "勾选=预约到本轮结束再拼"又被说成"强制做完一轮才能拼、不符合习惯"。
+   * 合起来的正解就是**先进模式选择**。
+   */
   const startReview = () => {
     if (due.length) {
-      setReviewQueue(due); setReviewIndex(0); setRevealed(false); setPractice(false)
-      setSpellRun(false); setReviewKind('due'); setView('review')
+      setPendingQueue({ items: due, kind: 'due' })
+      setView('review-setup')
       return
     }
     if (todayQueue.length) {
-      setReviewQueue(todayQueue); setReviewIndex(0); setRevealed(false); setPractice(true)
-      setSpellRun(false); setReviewKind('today'); setView('review')
+      setPendingQueue({ items: todayQueue, kind: 'today' })
+      setView('review-setup')
       flash('今天的复习已完成 —— 这一轮是加练，不改变复习排期', TIP_LONG_MS)
       return
     }
     flash('今天还没有学过的词 —— 去查几个新词，或在收藏夹里收几个')
   }
+
+  /** 开始这一轮：模式已定，practice 由"是不是加练 + 是不是拼写"决定 */
+  const beginReview = (mode) => {
+    const pending = pendingQueue || { items: [], kind: 'due' }
+    if (!pending.items.length) return
+    const m = mode || reviewMode
+    setReviewMode(m)
+    setReviewQueue(pending.items)
+    setReviewIndex(0); setRevealed(false)
+    setPractice(pending.kind !== 'due' || m === 'spell')
+    setReviewKind(pending.kind)
+    setPendingQueue(null)
+    setView('review')
+  }
+
+  /** 回合中途换模式：重开这一轮（明确的、可预期的行为，不做"半路变题"） */
+  const switchReviewMode = (mode) => {
+    if (mode === reviewMode || !reviewQueue) return
+    setReviewMode(mode)
+    setReviewIndex(0); setRevealed(false)
+    setPractice(reviewKind !== 'due' || mode === 'spell')
+    flash(mode === 'spell' ? '已切到拼写模式 —— 这一轮从头开始拼' : '已切回复习模式 —— 这一轮从头开始', TIP_LONG_MS)
+  }
+
   /* 斩掉：立刻从当前这一轮里也拿掉（不然用户还要再看它一次） */
   const killCurrent = (item) => {
     killWord(item)
@@ -662,12 +688,9 @@ export default function App() {
     setRevealed(false)
     flash('已斩掉「' + (item.head || '') + '」，以后不再进复习清单', TIP_LONG_MS)
   }
-  /**
-   * 进入拼写阶段：同一批词、从第 1 个开始、只练不写排期。
-   * 两条入口：① 用户勾了拼写模式 → 本轮做完自动进来；② 完成页手动点「用拼写再过一遍」。
-   */
+  /** 完成页的「用拼写再过一遍」：同一批词、从第 1 个开始、只练不写排期 */
   const startSpellRun = useCallback(() => {
-    setSpellRun(true)
+    setReviewMode('spell')
     setPractice(true)
     setReviewIndex(0); setRevealed(false)
   }, [])
@@ -682,13 +705,6 @@ export default function App() {
     // 间隔会被推得越来越长，"练"反而把复习计划搞乱
     if (!practice) gradeEntry(cur, g)
     else markStudied()
-    // 这一轮的最后一张？若用户勾了拼写模式（= 预约），就从第 1 个开始拼写这一批词
-    if (reviewIndex + 1 >= reviewQueue.length && spell && !spellRun) {
-      flash('这一轮完成 —— 从第 1 个开始拼写这 ' + reviewQueue.length + ' 个词', TIP_LONG_MS)
-      setReviewIndex(0); setRevealed(false)
-      startSpellRun()
-      return
-    }
     setReviewIndex((i) => i + 1); setRevealed(false)
   }
   /* 拼写出错 / 拼写时看了答案：也进错词本（ReviewPane 在那一刻回调） */
@@ -698,17 +714,17 @@ export default function App() {
     const q = wrongQueue()
     if (!q.length) { flash('错词本里还没有能练的词'); return }
     setWrongOpen(false)
-    setReviewQueue(q); setReviewIndex(0); setRevealed(false); setPractice(true); setView('review')
+    setReviewQueue(q); setReviewIndex(0); setRevealed(false); setPractice(true)
+    setReviewMode('review'); setReviewKind('wrong'); setView('review')
   }
-  /* 过完一轮之后手动开一轮拼写练习（与"预约自动进入"是同一个动作） */
+  /* 完成页的「用拼写再过一遍」 */
   const restartSpell = () => {
     if (!reviewQueue || !reviewQueue.length) return
-    setSpell(true)
     startSpellRun()
   }
   const exitReview = () => {
     const n = reviewQueue ? Math.min(reviewIndex, reviewQueue.length) : 0
-    setView('search'); setReviewQueue(null); setPractice(false); setSpellRun(false)
+    setView('search'); setReviewQueue(null); setPractice(false); setPendingQueue(null)
     if (n > 0) flash('这一轮复习完成，共 ' + n + ' 个词', TIP_LONG_MS)
   }
 
@@ -964,26 +980,23 @@ export default function App() {
 
         {view === 'review' && reviewQueue ? (
           <ReviewPane queue={reviewQueue} index={reviewIndex} revealed={revealed} schedule={schedule}
-            spell={spell} practice={practice} killedCount={killedList.length} wrongCount={wrongItems.length}
-            practiceLabel={spellRun ? '拼写练习' : reviewKind === 'wrong' ? '错词练习' : reviewKind === 'today' ? '今日加练' : ''}
+            mode={reviewMode} onSwitchMode={switchReviewMode}
+            practice={practice} killedCount={killedList.length} wrongCount={wrongItems.length}
+            practiceLabel={[
+              reviewMode === 'spell' ? '拼写练习' : '',
+              reviewKind === 'wrong' ? '错词练习' : reviewKind === 'today' ? '今日加练' : '',
+            ].filter(Boolean).join(' · ')}
             mix={practice ? null : queueMix}
-            spellRun={spellRun}
-            onToggleSpell={(on) => {
-              setSpell(on)
-              // 在拼写阶段里关掉 = "我不拼了"：**结束这一轮**并落到"本轮完成"。
-              // 之前只把 spellRun 关掉，用户就被扔回普通复习、还得把剩下的词再走一遍 ——
-              // 他的原话是"关闭拼写模式，那就又需要重来一轮"。
-              if (!on && spellRun) {
-                setSpellRun(false)
-                setReviewIndex(reviewQueue ? reviewQueue.length : 0)
-                setRevealed(false)
-                flash('已结束拼写练习', TIP_NORMAL_MS)
-              }
-            }}
             onRestartSpell={restartSpell}
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
             onSpellWrong={noteSpellWrong}
             onReveal={() => setRevealed(true)} onGrade={grade} onKill={killCurrent} onExit={exitReview} />
+        ) : view === 'review-setup' ? (
+          <ReviewSetup queue={(pendingQueue && pendingQueue.items) || []} mix={queueMix}
+            kind={pendingQueue ? pendingQueue.kind : 'due'}
+            mode={reviewMode} setMode={setReviewMode}
+            onStart={beginReview}
+            onExit={() => { setPendingQueue(null); setView('search') }} />
         ) : view === 'zh' ? (
           <ZhPicker term={zhQuery} items={zhCandidates} busy={busy} error={error}
             lastPick={(() => { try { return JSON.parse(safeGet(ZH_PICK_KEY, '{}'))[zhQuery] || '' } catch { return '' } })()}

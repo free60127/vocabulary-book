@@ -593,8 +593,21 @@ async function runProfile(browser, p) {
     if (!stillHere) { await page.goto(BASE, { waitUntil: 'domcontentloaded' }); await page.waitForSelector('.status-chip'); }
 
     at('复习');
-    /* ---------- 5a. 一轮三张卡：本子 2 张 + 收藏夹 1 张 ---------- */
+    /* ---------- 5a. 一轮三张卡：本子 2 张 + 收藏夹 1 张 ----------
+       现在进来先选模式（复习 / 拼写），选完直接按那个模式跑整轮 —— 不再是"进去再勾选"。 */
     await page.locator('.due-btn').click();
+    await page.waitForSelector('.review-setup', { timeout: 8000 });
+    {
+      const setup = await page.evaluate(() => ({
+        modes: [...document.querySelectorAll('.review-setup .mode-card strong')].map((x) => x.textContent.trim()),
+        text: (document.querySelector('.review-setup')?.innerText || '').replace(/\s+/g, ' ').slice(0, 120),
+      }));
+      check(p.id, '进复习先选模式（复习 / 拼写）', setup.modes.length === 2 && /复习模式/.test(setup.modes[0]) && /拼写模式/.test(setup.modes[1]), setup.modes.join('/'));
+      check(p.id, '模式选择页说明这一批多少个词', /这一批 \d+ 个词/.test(setup.text), setup.text);
+      await auditShot('review-setup');
+      await page.locator('.review-setup .mode-card', { hasText: '复习模式' }).click();
+      await page.locator('.review-setup .primary-btn').click();
+    }
     await page.waitForSelector('.review-pane', { timeout: 8000 });
     await page.waitForTimeout(250);
     const queueLen = await page.evaluate(() => {
@@ -605,25 +618,25 @@ async function runProfile(browser, p) {
     const mixText = await page.evaluate(() => document.querySelector('.queue-mix')?.textContent.replace(/\s+/g, ' ').trim() || '');
     check(p.id, '复习页显示队列构成（本子 N · 收藏 M）', /本子\s*\d+/.test(mixText) && /收藏\s*\d+/.test(mixText), mixText);
 
-    /* 拼写模式是"预约"：勾上不该把当前这张卡变成中文释义/拼写题（用户报过"一开拼写模式全变成中文"） */
+    /* 轮内换模式：明确的"从头开始"，不做半路变题（用户先后两次反馈合起来的结论） */
     {
-      await page.locator('.spell-switch input').check();
-      await page.waitForTimeout(300);
-      const reserved = await page.evaluate(() => ({
-        head: document.querySelector('.review-word strong')?.textContent.trim() || '',
-        hint: (document.querySelector('.spell-reserved')?.textContent || '').replace(/\s+/g, ' ').trim(),
+      await page.locator('.mode-switch .mode-chip', { hasText: '拼写' }).click();
+      await page.waitForTimeout(500);
+      const sw = await page.evaluate(() => ({
+        header: document.querySelector('.review-pane .panel-head h2')?.textContent.replace(/\s+/g, ' ').trim() || '',
         spellInput: document.querySelectorAll('.spell-input').length,
-        gradeBar: document.querySelectorAll('.grade-bar button').length,
+        index: (document.querySelector('.review-pane .panel-head h2')?.textContent || '').match(/\/\s*(\d+)/)?.[0] || '',
+        toast: document.querySelector('.fav-tip.toast')?.textContent || '',
       }));
-      check(p.id, '勾上拼写模式后卡片仍显示英文词头', /^[ -~]+$/.test(reserved.head) && reserved.head.length > 1,
-        reserved.head);
-      check(p.id, '预约提示说明"这一轮做完后从第 1 个开始"', /从第 1 个开始/.test(reserved.hint), reserved.hint.slice(0, 50));
-      check(p.id, '预约态不出拼写输入框、当前卡照常可评分', reserved.spellInput === 0 && reserved.gradeBar === 0);
-      await shot('spell-reserved');
-      await page.locator('.spell-switch input').uncheck();   // 取消预约，后面按普通一轮走
-      // 焦点还留在复选框上时，空格会被浏览器拿去勾选它（而不是翻面）—— 把焦点交还给页面
-      await page.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
-      await page.waitForTimeout(200);
+      check(p.id, '轮内切到拼写：立刻变拼写题且从头开始', sw.spellInput === 1 && /1\s*\//.test(sw.header), JSON.stringify(sw).slice(0, 110));
+      // 再切回复习，后面按正常流程走
+      await page.locator('.mode-switch .mode-chip', { hasText: '复习' }).click();
+      await page.waitForTimeout(500);
+      const back = await page.evaluate(() => ({
+        spellInput: document.querySelectorAll('.spell-input').length,
+        header: document.querySelector('.review-pane .panel-head h2')?.textContent.replace(/\s+/g, ' ').trim() || '',
+      }));
+      check(p.id, '再切回复习模式也是从头开始', back.spellInput === 0 && /1\s*\//.test(back.header), JSON.stringify(back).slice(0, 90));
     }
 
     const reveal = async () => {
@@ -749,24 +762,11 @@ async function runProfile(browser, p) {
       check(p.id, '点「用拼写再过一遍」进入拼写练习', /拼写练习/.test(await page.locator('.review-pane').innerText().catch(() => '')));
       check(p.id, '拼写模式出现输入框', (await page.locator('.spell-input').count()) === 1);
 
-      /* 拼写中途关掉开关 = 结束这一轮，不该被扔回普通复习把剩下的词再走一遍
-         （用户原话："关闭拼写模式，那就又需要重来一轮"） */
-      // ⚠️ 用 click() 而不是 uncheck()：关掉开关会让这一轮立刻结束，开关随卡片一起卸载，
-      // 而 uncheck() 会一直等"状态变成未勾选"（元素都没了）→ 必然超时（实测踩过）
-      await page.locator('.spell-switch input').click();
-      await page.waitForTimeout(500);
-      const afterOff = await page.evaluate(() => ({
-        done: Boolean(document.querySelector('.review-done-line')),
-        card: Boolean(document.querySelector('.review-word')),
-        spellInput: document.querySelectorAll('.spell-input').length,
-        gradeBar: document.querySelectorAll('.grade-bar').length,
-      }));
-      check(p.id, '拼写中途关掉开关 → 直接结束这一轮（不是回到普通复习重来）',
-        afterOff.done && !afterOff.card && !afterOff.gradeBar && !afterOff.spellInput, short(afterOff));
-      // 继续后面的拼写检查：从完成页重新进拼写
-      await page.locator('.review-done-actions .primary-btn').click();
-      await page.waitForTimeout(400);
-      check(p.id, '从完成页可以重新进入拼写练习', (await page.locator('.spell-input').count()) === 1);
+      /* 拼写轮里没有"勾选框"了 —— 模式在进来之前就定了；
+         轮内想换模式要走「复习 / 拼写」那对小按钮，且明确从头开始（前面已验证） */
+      check(p.id, '拼写轮里没有勾选框（模式进来前就定好）', (await page.locator('.spell-switch input').count()) === 0);
+      check(p.id, '拼写轮顶栏显示当前模式', /拼写/.test(await page.locator('.mode-switch').innerText().catch(() => '')));
+
       const shownHead = await page.evaluate(() => document.querySelector('.review-word strong')?.textContent.trim());
       check(p.id, '拼写模式不显示词头（否则就是抄）', !/^[a-z]+$/i.test(String(shownHead)) && String(shownHead).length > 0, String(shownHead).slice(0, 14));
 
@@ -824,15 +824,22 @@ async function runProfile(browser, p) {
       // 关键：这时候点「今日待复习」必须进得去，而且这一轮是"今日加练"（只练不写排期）
       const schedBefore = await page.evaluate(() => localStorage.getItem('vb-schedule'));
       await page.locator('.due-btn').click();
-      await page.waitForSelector('.review-pane', { timeout: 8000 });
+      // 没有到期的词 → 进的是「今日加练」的模式选择页（标题就是今日加练）
+      await page.waitForSelector('.review-setup', { timeout: 8000 });
       await page.waitForTimeout(300);
       const again = await page.evaluate(() => ({
-        header: document.querySelector('.review-pane .panel-head h2')?.textContent.replace(/\s+/g, ' ').trim() || '',
-        cards: document.querySelectorAll('.review-word').length,
+        header: (document.querySelector('.review-setup h2')?.textContent || '').replace(/\s+/g, ' ').trim(),
+        body: (document.querySelector('.review-setup')?.innerText || '').replace(/\s+/g, ' ').slice(0, 90),
       }));
-      check(p.id, '今天复习完之后「今日待复习」仍然进得去', again.cards === 1, again.header);
-      check(p.id, '这一轮标成「今日加练」', /今日加练/.test(again.header), again.header);
+      check(p.id, '今天复习完之后「今日待复习」仍然进得去', /今日加练/.test(again.header), JSON.stringify(again).slice(0, 110));
+      check(p.id, '加练页说明"不改变排期"', /不改变排期/.test(again.body), again.body);
       await auditShot('review-today-practice');
+      await page.locator('.review-setup .mode-card', { hasText: '复习模式' }).click();
+      await page.locator('.review-setup .primary-btn').click();
+      await page.waitForSelector('.review-pane', { timeout: 8000 });
+      await page.waitForTimeout(300);
+      const prac = await page.evaluate(() => document.querySelector('.review-pane .panel-head h2')?.textContent.replace(/\s+/g, ' ').trim() || '');
+      check(p.id, '这一轮标成「今日加练」', /今日加练/.test(prac), prac);
       // 加练不写排期
       await page.locator('.review-word').click().catch(() => {});
       await page.waitForTimeout(200);
@@ -849,7 +856,7 @@ async function runProfile(browser, p) {
       await page.waitForTimeout(400);
       // 回到复习页继续后面的用例
       await page.locator('.due-btn').click();
-      await page.waitForSelector('.review-pane', { timeout: 8000 });
+      await page.waitForSelector('.review-setup', { timeout: 8000 });
       await page.waitForTimeout(300);
     }
 

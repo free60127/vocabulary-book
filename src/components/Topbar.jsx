@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  BookMarked, Cloud, Flame, LogIn, MoreVertical, PanelLeftClose, PanelLeftOpen, PenLine, Settings, Skull,
+  BookMarked, Cloud, Flame, LogIn, MoreVertical, PanelLeftClose, PanelLeftOpen, PenLine, Settings, Skull,
   Sparkles, Star,
 } from 'lucide-react';
 

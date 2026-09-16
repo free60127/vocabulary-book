@@ -38,13 +38,12 @@ function cardOf(item) {
  *  ③ **斩掉**：这个词我认识，以后别再进复习清单（可在「已斩掉的词」里恢复）。
  */
 export default function ReviewPane({
-  queue, index, revealed, schedule, spell, spellRun, practice, practiceLabel, killedCount, wrongCount, mix,
-  onReveal, onGrade, onKill, onToggleSpell, onRestartSpell, onExit, onManageKilled, onManageWrong,
+  queue, index, revealed, schedule, mode, onSwitchMode, practice, practiceLabel, killedCount, wrongCount, mix,
+  onReveal, onGrade, onKill, onRestartSpell, onExit, onManageKilled, onManageWrong,
   onSpellWrong,
 }) {
-  // 「正在拼写」= 用户勾了拼写 **且** 这一轮已经进入拼写阶段。
-  // 只勾选不进阶段：本轮照常翻面评分，做完才从第 1 个开始拼（用户明确要的时序）。
-  const spelling = Boolean(spell && spellRun);
+  // 模式在**进来之前**就定好了（见 ReviewSetup）：整轮要么复习、要么拼写，中途不玩花样。
+  const spelling = mode === 'spell';
   const [answer, setAnswer] = useState('');
   const [hintLevel, setHintLevel] = useState(0);
   const [missCount, setMissCount] = useState(0);
@@ -53,8 +52,8 @@ export default function ReviewPane({
   const touchStart = useRef(null);
   const item = queue[index];
   const done = !item;
-  /* 完成页上 spellRun 可能刚被清掉，所以用"上一轮是不是拼写轮"来定文案 */
-  const spellingState = spelling || (done && practice && spell);
+  /* 完成页的文案用"刚刚那一轮是不是拼写轮"来定 */
+  const spellingState = spelling;
 
   /* 换卡就清干净：输入框、提示级数、错误次数、上一张的"拼对了" */
   useEffect(() => {
@@ -169,11 +168,14 @@ export default function ReviewPane({
             </span>
           ) : null}
           <div className="review-head-tools">
-            <label className="spell-switch"
-              title={spelling ? '正在拼写这一批词；取消即结束拼写' : '勾上后：这一轮照常做完，然后从第 1 个开始拼写这一批词'}>
-              <input type="checkbox" checked={spell} onChange={(e) => onToggleSpell(e.target.checked)} />
-              <span>拼写模式</span>
-            </label>
+            <div className="mode-switch" role="group" aria-label="练习模式">
+              <button className={'mode-chip' + (!spelling ? ' active' : '')}
+                onClick={() => !spelling || onSwitchMode('review')} disabled={!spelling ? false : undefined}
+                title="看词回想 → 翻面评分">复习</button>
+              <button className={'mode-chip' + (spelling ? ' active' : '')}
+                onClick={() => spelling || onSwitchMode('spell')}
+                title="看中文释义拼出单词">拼写</button>
+            </div>
             <button className="ghost-btn sm" onClick={onExit} title="Esc">退出复习</button>
           </div>
         </div>
@@ -196,12 +198,7 @@ export default function ReviewPane({
             ? '把对应的单词拼出来（拼对才进入下一个）'
             : `先回想它的意思与用法，再${revealed ? '评分' : '点一下这个词（或按空格）翻面核对'}`}
         </p>
-        {spell && !spelling && !practice ? (
-          <p className="spell-reserved small" role="status">
-            已预约拼写：这一轮做完（还剩 {Math.max(0, queue.length - index)} 个）后，
-            <b>从第 1 个开始</b>拼写这 {queue.length} 个词
-          </p>
-        ) : null}
+
 
         {spelling ? (
           <form className="spell-box" onSubmit={submitSpelling}>
