@@ -11,8 +11,8 @@ import {
   summarizeBooks, upsertEntry,
 } from '../wordbook.js';
 import {
-  addStudyDay, addWrong, buildReviewQueue, buildWrongQueue, clearWrong, dayKey, headKey,
-  scheduleOf, sm2Review, summarizeStreak, wrongList,
+  addStudyDay, addWrong, buildReviewQueue, buildTodayQueue, buildWrongQueue, clearWrong, dayKey,
+  headKey, scheduleOf, sm2Review, summarizeStreak, wrongList,
 } from '../review.js';
 import { addFavorite, attachEntryToFavorite, findFavorite, removeFavorite } from '../favorites.js';
 import { TIP_LONG_MS, TIP_NORMAL_MS } from '../constants.js';
@@ -87,6 +87,12 @@ export function useBooks({ flash }) {
   const due = useMemo(
     () => buildReviewQueue({ entries, favorites, schedule, killed, revived }),
     // today 只是"跨天"的信号：它变了就重算（届时 now 已经是新的一天）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entries, favorites, schedule, killed, revived, today],
+  );
+  /* 今天碰过的词（复习过的 + 新加的 + 收藏的）：复习完之后还能再进去练一遍 */
+  const todayQueue = useMemo(
+    () => buildTodayQueue({ entries, favorites, schedule, killed, revived }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [entries, favorites, schedule, killed, revived, today],
   );
@@ -317,7 +323,7 @@ export function useBooks({ flash }) {
     // 数据
     books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites,
     killed, revived, wrong,
-    entries, stats, streak, due, local,
+    entries, stats, streak, due, todayQueue, local,
     // 落盘
     persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory,
     persistDeletedBooks, persistDeletedEntries, persistDeletedFavorites, markStudied, applyMerged,

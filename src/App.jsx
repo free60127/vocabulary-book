@@ -15,6 +15,7 @@ import {
   saveFollowups, saveSettings, saveSpell, saveTheme,
 } from './storage.js'
 import { applyTheme } from './theme.js'
+import { toTop } from './scroll.js'
 import { findBookByHead, findEntryBook } from './wordbook.js'
 import { headKey, killedSet, nextDueAt } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
@@ -35,6 +36,7 @@ import { MergeBookModal, RenameBookModal } from './components/modals/RenameBookM
 import KilledModal from './components/modals/KilledModal.jsx'
 import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
+import BackToTop from './components/BackToTop.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -63,7 +65,7 @@ export default function App() {
   const store = useBooks({ flash })
   const {
     books, schedule, history, favorites, local,
-    entries, stats, streak, due,
+    entries, stats, streak, due, todayQueue,
     markStudied, applyMerged,
     saveEntry, newBook, deleteEntry: dropEntry, deleteBook: dropBook, renameBook, mergeBooksInto,
     pushHistoryEntry, attachFavoriteEntry,
@@ -134,6 +136,8 @@ export default function App() {
    * 用户的原话是"不是现在开启后就变成拼写，然后拼一个过一个"。
    */
   const [spellRun, setSpellRun] = useState(false)
+  /** 这一轮是什么：due（今天的复习）/ today（今日加练）/ wrong（错词练习） */
+  const [reviewKind, setReviewKind] = useState('due')
 
   const cloud = useCloud({ getLocal: () => local, applyMerged, flash })
   const {
@@ -370,6 +374,9 @@ export default function App() {
       const e = out.data && out.data.entry
       if (!e) throw new Error('模型没有返回词条，请重试')
       setEntry(e); setView('search'); setProgress('')
+      // 新卡片顶到最上面：不然用户还停在上一屏（引导说明那一块），
+      // 得自己往下滚才看得到刚查到的词
+      requestAnimationFrame(() => toTop({ smooth: false }))
       // 连词条快照一起存：点历史要能**直接回到这张卡片**，而不是把词填回搜索框再查一次
       pushHistoryEntry(e)
       // 这个词如果是从收藏夹点过来查的，把完整词条补进那条收藏（之后「加入词库」就能一步完成）
@@ -565,9 +572,27 @@ export default function App() {
   }
 
   /* ---------- 复习 ---------- */
+  /**
+   * 进复习。
+   *  · 有到期的词 → 今天的复习队列（写排期）；
+   *  · 今天已经复习完了 → **今日加练**：把今天碰过的词再走一遍（只练不写排期）。
+   *    没有这条路径的话，一轮做完「今日待复习」就再也点不进去 ——
+   *    想临时补一遍拼写都没有入口（用户反馈）。
+   *  · 今天一个词都没碰过 → 才是真的没得练，给提示。
+   */
   const startReview = () => {
-    if (!due.length) { flash('今天没有到期的词 —— 去查几个新词，或在收藏夹里收几个'); return }
-    setReviewQueue(due); setReviewIndex(0); setRevealed(false); setPractice(false); setSpellRun(false); setView('review')
+    if (due.length) {
+      setReviewQueue(due); setReviewIndex(0); setRevealed(false); setPractice(false)
+      setSpellRun(false); setReviewKind('due'); setView('review')
+      return
+    }
+    if (todayQueue.length) {
+      setReviewQueue(todayQueue); setReviewIndex(0); setRevealed(false); setPractice(true)
+      setSpellRun(false); setReviewKind('today'); setView('review')
+      flash('今天的复习已完成 —— 这一轮是加练，不改变复习排期', TIP_LONG_MS)
+      return
+    }
+    flash('今天还没有学过的词 —— 去查几个新词，或在收藏夹里收几个')
   }
   /* 斩掉：立刻从当前这一轮里也拿掉（不然用户还要再看它一次） */
   const killCurrent = (item) => {
@@ -739,6 +764,7 @@ export default function App() {
         {view === 'review' && reviewQueue ? (
           <ReviewPane queue={reviewQueue} index={reviewIndex} revealed={revealed} schedule={schedule}
             spell={spell} practice={practice} killedCount={killedList.length} wrongCount={wrongItems.length}
+            practiceLabel={spellRun ? '拼写练习' : reviewKind === 'wrong' ? '错词练习' : reviewKind === 'today' ? '今日加练' : ''}
             mix={practice ? null : queueMix}
             spellRun={spellRun}
             onToggleSpell={(on) => {
@@ -862,6 +888,9 @@ export default function App() {
           onRemove={removeFavoriteById}
           onAddToBook={addFavoriteToBook} />
       ) : null}
+
+      {/* 回到顶部：查完长卡片后想翻回上面最常用的动作 */}
+      <BackToTop />
 
       {/* 打印页放在 .app 之外：body.printing 时把 .app 整个藏起来、只留它 */}
       <PrintSheet job={printJob} />

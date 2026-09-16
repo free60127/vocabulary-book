@@ -251,7 +251,7 @@ export const isKilledHead = (killed, revived, head) => killedSet(killed, revived
  *
  * @returns {Array<{key,kind,head,phonetic,schedule,entry?,favorite?}>} 按"拖得最久"排序
  */
-export function buildReviewQueue({ entries, favorites, schedule, killed, revived, now = Date.now() }) {
+export function buildReviewQueue({ entries, favorites, schedule, killed, revived, now = Date.now(), ignoreDue = false }) {
   const dead = killedSet(killed, revived);
   const bookHeads = new Set();
   for (const e of Array.isArray(entries) ? entries : []) {
@@ -268,7 +268,30 @@ export function buildReviewQueue({ entries, favorites, schedule, killed, revived
     if (dead.has(key) || bookHeads.has(key)) continue;   // 斩掉的 / 已经在单词本里的，都不重复进
     out.push({ key: f.id, kind: 'favorite', head: f.head, phonetic: f.phonetic || '', favorite: f, schedule: scheduleOf(schedule, f.id, f.at || 0, now) });
   }
+  if (ignoreDue) return out;
   return out.filter((x) => isDueOn(x.schedule.due, now)).sort((a, b) => a.schedule.due - b.schedule.due);
+}
+
+/**
+ * 「今天碰过的词」——已经复习完今天该复习的之后，让用户还能再进去练一遍。
+ *
+ * 为什么需要：一轮做完 `due` 就空了，「今日待复习」随即变成一句"今天没有到期的词"，
+ * 想临时补一遍拼写、或者只是再过一遍今天的词，都没有入口（用户的原话：
+ * "完成一天的复习后就点不回去了，今天之内如果想再补上拼写也不行"）。
+ *
+ * 口径 = 今天**复习过**的（排期里 lastReviewed 是今天）+ 今天**新加/收藏**的 + 所有到期的。
+ * 这一轮当练习处理（不写排期）：这些词今天已经评过分，再评一次会把间隔越推越长。
+ */
+export function buildTodayQueue({ entries, favorites, schedule, killed, revived, now = Date.now() }) {
+  const all = buildReviewQueue({ entries, favorites, schedule, killed, revived, now, ignoreDue: true });
+  const today = dayKey(now);
+  return all.filter((x) => {
+    const reviewed = Number((x.schedule && x.schedule.lastReviewed) || 0);
+    if (reviewed && dayKey(reviewed) === today) return true;      // 今天复习过
+    const created = Number((x.entry && x.entry.createdAt) || (x.favorite && x.favorite.at) || 0);
+    if (created && dayKey(created) === today) return true;        // 今天新加 / 今天收藏
+    return isDueOn(x.schedule.due, now);                          // 到期的当然也算
+  });
 }
 
 /**

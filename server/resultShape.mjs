@@ -218,10 +218,43 @@ export function sanitizeQuiz(raw) {
  * （模型偶尔还是会吐 JSON —— 那就把里面的 text/answer 字段抠出来，
  *   总比把一整段 JSON 显示给用户强。）
  */
+/**
+ * 从任意形状里抠出"最像答案"的那段文本。
+ * 顺序：常见字段 → 数组第一项 → **对象里最长的那个字符串值**（模型换个 key 也能救回来，
+ * 总比把一整段 JSON 甩给用户或者直接报"没有回答"强）。
+ */
+function pickAnswerText(obj, depth = 0) {
+  if (depth > 2 || !obj || typeof obj !== 'object') return '';
+  if (Array.isArray(obj)) {
+    for (const it of obj) {
+      const t = pickAnswerText(it, depth + 1);
+      if (t) return t;
+    }
+    return '';
+  }
+  for (const key of ['answer', 'text', 'reply', 'content', 'result', 'message', '回答', '答案']) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.trim()) return v;
+    if (v && typeof v === 'object') {
+      const t = pickAnswerText(v, depth + 1);
+      if (t) return t;
+    }
+  }
+  let best = '';
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v.trim().length > best.length) best = v;
+    else if (v && typeof v === 'object') {
+      const t = pickAnswerText(v, depth + 1);
+      if (t.length > best.length) best = t;
+    }
+  }
+  return best;
+}
+
 export function sanitizeFollowup(raw) {
-  if (isPlainObject(raw)) {
-    const pick = raw.answer || raw.text || raw.reply || raw.content;
-    if (typeof pick === 'string') return sanitizeFollowup(pick);
+  if (raw && typeof raw === 'object') {
+    const pick = pickAnswerText(raw);
+    if (pick) return sanitizeFollowup(pick);
   }
   let text = boundedString(raw, 8000);
   // ```json ... ``` / ``` ... ``` 围栏
@@ -230,12 +263,15 @@ export function sanitizeFollowup(raw) {
   // ⚠️ 这里**不能**用 `[^\n]{0,20}` 去兜"回答如下"这类尾巴 —— 它是贪婪的，
   // 会把冒号后面的正文一起吃掉（实测：整段回答被剥成空串）。
   text = text.replace(/^(好的|当然|没问题|明白)[，,。!！]?\s*(我来|我|帮你|给你)?\s*(回答|说|解释|讲|答)(一下|如下|这个问题)?[:：]?\s*/, '').trim();
-  if (text.startsWith('{')) {
+  if (text.startsWith('{') || text.startsWith('[')) {
     try {
-      const obj = JSON.parse(text);
-      const pick = obj.answer || obj.text || obj.reply || obj.content;
-      if (typeof pick === 'string' && pick.trim()) text = pick.trim();
+      const pick = pickAnswerText(JSON.parse(text));
+      if (pick && pick.trim()) text = pick.trim();
     } catch { /* 不是 JSON 就原样留着 */ }
+  }
+  // 剥掉围栏/开场白之后如果空了，把"只去围栏"的版本还回来 —— 有字总比报错强
+  if (!text) {
+    text = boundedString(raw, 8000).replace(/^\s*```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
   }
   return text.slice(0, 4000).trim();
 }

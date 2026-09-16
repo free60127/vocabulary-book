@@ -8,7 +8,7 @@
  */
 import {
   EASE_MAX, EASE_MIN, GRADES, INTERVAL_MAX, addStudyDay, addWrong, buildReviewQueue, buildWrongQueue,
-  checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, isDueOn, killedSet, mergeDays,
+  buildTodayQueue, checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, isDueOn, killedSet, mergeDays,
   mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
   spellHint, summarizeStreak, wrongList,
 } from '../src/review.js';
@@ -305,6 +305,51 @@ const failed = results.filter((r) => !r.ok);
     dayKey(nextDueAt([entry], map(night + 2 * DAYms), morning)) === '2026-09-17',
     new Date(nextDueAt([entry], map(night + 2 * DAYms), morning)).toLocaleString('zh-CN'));
   check('今天已到期的词不算"下一次"', nextDueAt([entry], map(night + DAYms), morning) === 0);
+}
+
+
+/* ==========================================================================
+   「今日加练」队列：复习完今天该复习的之后，还能再进去练一遍
+   ========================================================================== */
+{
+  const now = new Date(2026, 8, 16, 10, 0, 0).getTime();     // 9/16 10:00
+  const yest = new Date(2026, 8, 15, 21, 0, 0).getTime();
+  const tomorrow = new Date(2026, 8, 17, 21, 0, 0).getTime();
+  const E = (id, head, createdAt = yest) => ({ id, head, kind: 'word', brief: head, createdAt });
+  const S = (due, lastReviewed = 0) => ({ ease: 2.5, interval: 1, due, reps: 1, lapses: 0, lastReviewed, lastGrade: 'normal' });
+
+  const entries = [E('a', 'alpha'), E('b', 'beta', now)];
+  const schedule = {
+    a: S(tomorrow, now),      // 今天复习过、明天才到期
+    b: S(now, 0),             // 今天新加、还没复习
+  };
+  const q = (map) => buildTodayQueue({ entries, favorites: [], schedule: map, killed: {}, revived: {}, now });
+  check('今日加练包含"今天复习过"的词', q(schedule).some((x) => x.head === 'alpha'));
+  check('今日加练包含"今天新加"的词', q(schedule).some((x) => x.head === 'beta'));
+  check('昨天复习、又不到期的词不进今日加练',
+    !q({ ...schedule, a: S(tomorrow, yest) }).some((x) => x.head === 'alpha'));
+  check('斩掉的词不进今日加练',
+    !buildTodayQueue({ entries, favorites: [], schedule, killed: { alpha: now }, revived: {}, now }).some((x) => x.head === 'alpha'));
+  const fav = [{ id: 'fav-x', head: 'gamma', at: now }];     // 今天收藏的
+  check('今天收藏的词也算今天碰过',
+    buildTodayQueue({ entries: [], favorites: fav, schedule: {}, killed: {}, revived: {}, now }).some((x) => x.head === 'gamma'));
+  check('今天什么都没碰 → 今日加练是空的', buildTodayQueue({
+    entries: [E('z', 'zeta')], favorites: [], schedule: { z: S(tomorrow, yest) }, killed: {}, revived: {}, now,
+  }).length === 0);
+  check('到期队列不受影响（仍然是"只看到期的"）',
+    buildReviewQueue({ entries, favorites: [], schedule, killed: {}, revived: {}, now }).map((x) => x.head).join(',') === 'beta');
+}
+
+
+/* ---------- 追问回答的"耐造型"：模型换 key / 套 JSON / 给数组都要能抠出来 ---------- */
+{
+  check('追问：模型换 key 也能抠出来', sanitizeFollowup({ explanation: '这个更正式，用在公文里。' }) === '这个更正式，用在公文里。');
+  check('追问：中文键照样认', sanitizeFollowup('{"回答":"接 to 才对。"}') === '接 to 才对。');
+  check('追问：嵌套一层也能挖出来', sanitizeFollowup({ data: { content: '嵌套里的答案' } }) === '嵌套里的答案');
+  check('追问：数组取第一段', sanitizeFollowup([{ text: '数组里的答案' }]) === '数组里的答案');
+  check('追问：围栏 + 开场白一起去掉', sanitizeFollowup('```text\n好的，我来回答：正文在此。\n```') === '正文在此。');
+  check('追问：真的空白才返回空（前端据此报错）', sanitizeFollowup('   \n ') === '');
+  check('追问：不再要求 JSON 模式（指令冲突会让模型回空壳）', /不要 JSON/.test(FOLLOWUP_SYSTEM_PROMPT));
 }
 
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);

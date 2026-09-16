@@ -38,7 +38,7 @@ function cardOf(item) {
  *  ③ **斩掉**：这个词我认识，以后别再进复习清单（可在「已斩掉的词」里恢复）。
  */
 export default function ReviewPane({
-  queue, index, revealed, schedule, spell, spellRun, practice, killedCount, wrongCount, mix,
+  queue, index, revealed, schedule, spell, spellRun, practice, practiceLabel, killedCount, wrongCount, mix,
   onReveal, onGrade, onKill, onToggleSpell, onRestartSpell, onExit, onManageKilled, onManageWrong,
   onSpellWrong,
 }) {
@@ -126,7 +126,7 @@ export default function ReviewPane({
         <div className="panel review-pane">
           <div className="panel-head"><h2>本轮完成</h2></div>
           <p className="review-done-line">
-            这一轮复习了 <b>{queue.length}</b> 个词{practice ? (spellingState ? '（拼写练习）' : '（错词练习）') : ''}。
+            这一轮复习了 <b>{queue.length}</b> 个词{practice ? '（' + (practiceLabel || (spellingState ? '拼写练习' : '练习')) + '）' : ''}。
             {practice ? '练习模式不改变复习排期。' : '下一次到期时会自动回到「今日待复习」。'}
           </p>
           <div className="review-done-actions">
@@ -162,7 +162,7 @@ export default function ReviewPane({
     <section className="editor">
       <div className="panel review-pane">
         <div className="panel-head">
-          <h2>复习 {index + 1} / {queue.length}{practice ? (spelling ? ' · 拼写练习' : ' · 错词练习') : ''}</h2>
+          <h2>复习 {index + 1} / {queue.length}{practice && practiceLabel ? ' · ' + practiceLabel : ''}</h2>
           {mix && (mix.fav > 0) ? (
             <span className="queue-mix muted small" title="今日待复习的构成：单词本里的到期词 + 收藏夹里还没收进本子的词">
               本子 {mix.book} · 收藏 {mix.fav}

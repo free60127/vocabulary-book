@@ -1015,3 +1015,23 @@ body.drawer-open { overflow: hidden; }
     color-scheme: light;
   }
 }
+
+/* ---------- 回到顶部 ----------
+   词条卡片很长（释义/近义/例句/词典核对/追问…），看到底部想查下一个词时，
+   之前只能一路往回滚。按钮浮在右下角，滚过一屏才出现。 */
+.back-to-top {
+  position: fixed;
+  right: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  z-index: 35;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(16, 34, 46, .18);
+}
+.back-to-top:hover { color: var(--brand); border-color: var(--brand); background: var(--panel); }
+@media screen and (max-width: 900px) {
+  /* 手机端底部有提示条、复习时还有钉底的评分条 —— 抬高一点，别压在它们身上 */
+  .back-to-top { right: 12px; bottom: calc(78px + env(safe-area-inset-bottom, 0px)); }
+}
+@media print { .back-to-top { display: none !important; } }

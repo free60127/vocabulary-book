@@ -303,6 +303,53 @@ async function runProfile(browser, p) {
     await page.waitForSelector('.saved-flag', { timeout: 10000 });
     await auditShot('saved');
 
+    at('回到顶部');
+    /* ---------- 1b2. 长卡片滚到底之后要能一键回顶 ---------- */
+    {
+      // 上一步点「加入单词本」时，保存栏在卡片底部，Playwright 会把页面滚下去 —— 先回到顶部
+      await page.evaluate(() => {
+        const ed = document.querySelector('.editor');
+        const root = document.scrollingElement || document.documentElement;
+        if (ed) ed.scrollTop = 0;
+        root.scrollTop = 0;
+      });
+      await page.waitForTimeout(700);
+      const before = await page.evaluate(() => Boolean(document.querySelector('.back-to-top')));
+      check(p.id, '回到顶部时按钮自己隐藏', !before);
+      // 滚到底（桌面端滚 .editor，手机端滚整页）
+      await page.evaluate(() => {
+        const ed = document.querySelector('.editor');
+        const root = document.scrollingElement || document.documentElement;
+        if (ed) ed.scrollTop = ed.scrollHeight;
+        root.scrollTop = root.scrollHeight;
+        window.dispatchEvent(new Event('scroll'));
+      });
+      await page.waitForTimeout(400);
+      const shown = await page.evaluate(() => {
+        const btn = document.querySelector('.back-to-top');
+        if (!btn) return null;
+        const r = btn.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height), inView: r.top > 0 && r.bottom <= window.innerHeight + 1 };
+      });
+      check(p.id, '滚到底出现「回到顶部」按钮', Boolean(shown) && shown.inView, JSON.stringify(shown));
+      if (p.touch) check(p.id, '「回到顶部」热区够大（44px）', shown && shown.w >= 44 && shown.h >= 44, JSON.stringify(shown));
+      await shot('back-to-top');
+      await page.locator('.back-to-top').click();
+      // 平滑滚动需要一点时间（小屏上更明显）：等它稳定下来再断言，别用固定 sleep 赌
+      await page.waitForFunction(() => {
+        const ed = document.querySelector('.editor');
+        const root = document.scrollingElement || document.documentElement;
+        return (root.scrollTop || 0) <= 4 && (!ed || (ed.scrollTop || 0) <= 4);
+      }, null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      const back = await page.evaluate(() => {
+        const ed = document.querySelector('.editor');
+        const root = document.scrollingElement || document.documentElement;
+        return { win: Math.round(root.scrollTop), ed: ed ? Math.round(ed.scrollTop) : 0, btn: Boolean(document.querySelector('.back-to-top')) };
+      });
+      check(p.id, '点它回到顶部（两个滚动容器都回零，按钮自己隐藏）', back.win <= 40 && back.ed <= 40 && !back.btn, JSON.stringify(back));
+    }
+
     at('词条追问');
     /* ---------- 1c. 追问：就地再问一句（复用任务轮询，答案是纯文本） ---------- */
     {
@@ -726,6 +773,51 @@ async function runProfile(browser, p) {
       const exitBtn = page.locator('.review-done-actions .ghost-btn');
       if ((await exitBtn.count()) > 0) await exitBtn.click();
       else await page.locator('.review-head-tools .ghost-btn').click();
+      await page.waitForTimeout(300);
+    }
+
+    /* ---------- 5b2. 复习完之后「今日待复习」仍然点得进去（今日加练） ---------- */
+    {
+      // 先确保已经退出复习：上一段（拼写）最后点了「回到查词」，也可能还停在完成页
+      if ((await page.locator('.review-pane').count()) > 0) {
+        const exit = page.locator('.review-done-actions .ghost-btn, .review-head-tools .ghost-btn').first();
+        if ((await exit.count()) > 0) await exit.click();
+        await page.waitForTimeout(450);
+      }
+      check(p.id, '（前置）已退出复习，回到主界面', (await page.locator('.search-bar').count()) === 1);
+
+      const dueEmpty = await page.evaluate(() => /待复习$/.test(document.querySelector('.due-btn').textContent.replace(/\s+/g, ' ').trim()));
+      check(p.id, '复习完之后没有到期的词（按钮不再显示计数）', dueEmpty, await page.locator('.due-btn').innerText());
+
+      // 关键：这时候点「今日待复习」必须进得去，而且这一轮是"今日加练"（只练不写排期）
+      const schedBefore = await page.evaluate(() => localStorage.getItem('vb-schedule'));
+      await page.locator('.due-btn').click();
+      await page.waitForSelector('.review-pane', { timeout: 8000 });
+      await page.waitForTimeout(300);
+      const again = await page.evaluate(() => ({
+        header: document.querySelector('.review-pane .panel-head h2')?.textContent.replace(/\s+/g, ' ').trim() || '',
+        cards: document.querySelectorAll('.review-word').length,
+      }));
+      check(p.id, '今天复习完之后「今日待复习」仍然进得去', again.cards === 1, again.header);
+      check(p.id, '这一轮标成「今日加练」', /今日加练/.test(again.header), again.header);
+      await auditShot('review-today-practice');
+      // 加练不写排期
+      await page.locator('.review-word').click().catch(() => {});
+      await page.waitForTimeout(200);
+      if ((await page.locator('.grade-bar .grade-ok').count()) > 0) await page.locator('.grade-bar .grade-ok').click();
+      await page.waitForTimeout(500);
+      const schedAfter = await page.evaluate(() => localStorage.getItem('vb-schedule'));
+      check(p.id, '今日加练不改动复习排期', schedBefore === schedAfter);
+      // 完成页可以顺势开拼写（"今天之内想再补上拼写"）
+      if ((await page.locator('.review-done-actions .ghost-btn').count()) > 0) {
+        await page.locator('.review-done-actions .ghost-btn').click();
+      } else {
+        await page.locator('.review-head-tools .ghost-btn').click();
+      }
+      await page.waitForTimeout(400);
+      // 回到复习页继续后面的用例
+      await page.locator('.due-btn').click();
+      await page.waitForSelector('.review-pane', { timeout: 8000 });
       await page.waitForTimeout(300);
     }
 

@@ -348,12 +348,20 @@ function parseJsonLoose(text) {
   if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
   throw new Error('模型返回不是有效 JSON，请重试或换模型');
 }
-async function callLLM({ baseUrl, model, apiKey, system, user, maxTokens }) {
+/**
+ * 调一次模型。
+ *
+ * @param {boolean} [o.jsonMode] 是否要求模型返回 JSON。**查词/出题要，追问不要** ——
+ *   追问的提示词明说"只输出回答正文，不要 JSON"，若同时又被 response_format 强制 JSON，
+ *   两条指令打架，模型就可能回一个空壳（线上就是这么翻车的：追问报"模型没有给出回答"）。
+ * @param {object} [o.meta] 诊断信息出口（finishReason / 内容长度），失败时能说清是"截断"还是"空"。
+ */
+async function callLLM({ baseUrl, model, apiKey, system, user, maxTokens, jsonMode = true, meta }) {
   const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
   const r = await postChat({
-    url, headers, withFormat: true,
+    url, headers, withFormat: jsonMode,
     body: {
       model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: 0.4, max_tokens: Number(maxTokens || process.env.AI_MAX_TOKENS || 8000),
@@ -362,7 +370,14 @@ async function callLLM({ baseUrl, model, apiKey, system, user, maxTokens }) {
   const text = await r.text();
   if (!r.ok) throw new Error('模型接口错误 ' + r.status + ': ' + text.slice(0, 500));
   const data = JSON.parse(text);
-  const content = data?.choices?.[0]?.message?.content;
+  const choice = (data && data.choices && data.choices[0]) || {};
+  const content = choice.message && choice.message.content;
+  if (meta) {
+    meta.finishReason = String(choice.finish_reason || '');
+    meta.length = typeof content === 'string' ? content.length : 0;
+    meta.reasoning = typeof (choice.message && choice.message.reasoning_content) === 'string'
+      ? choice.message.reasoning_content.length : 0;
+  }
   if (!content) throw new Error('模型没有返回内容，请重试');
   return content;
 }
@@ -455,14 +470,27 @@ async function runFollowupJob(jobId, { head, brief, pos, question, context, leve
   job.status = 'running';
   job.updatedAt = Date.now();
   saveJob(job);
+  const meta = {};
   const raw = await callLLM({
     baseUrl, model, apiKey,
     system: FOLLOWUP_SYSTEM_PROMPT,
     user: buildFollowupMessage({ head, brief, pos, question, context, level }),
-    maxTokens: 1200,
+    maxTokens: 1600,
+    jsonMode: false,          // 追问要的是人话，不是 JSON（见 callLLM 的注释）
+    meta,
   });
   const answer = sanitizeFollowup(raw);
-  if (!answer) throw new Error('模型没有给出回答，请换个说法再问一次');
+  if (!answer) {
+    // 空回答必须留下现场：不然只能对着"模型没有给出回答"干瞪眼（这正是线上发生的事）
+    console.error('[followup] 空回答:', JSON.stringify({
+      head, q: String(question).slice(0, 60),
+      finish: meta.finishReason, len: meta.length, reasoning: meta.reasoning,
+      raw: String(raw).slice(0, 200),
+    }));
+    throw new Error(meta.finishReason === 'length'
+      ? '回答被截断了，把问题问短一点再试一次'
+      : '模型这次没给出回答，再问一次试试（换个说法也可以）');
+  }
   job.data = { head, question, answer };
   job.status = 'done';
   job.updatedAt = Date.now();
