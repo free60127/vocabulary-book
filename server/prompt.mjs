@@ -11,13 +11,9 @@
  *  · 近义词逐个给"差别"，而不是给同义词列表 —— 学习者要的是"什么时候用哪个"；
  *  · 例句要能体现差别：每条例句配一句「它在这里承担什么语境功能」。
  */
-
 import { buildFactsBlock } from './dict.mjs';
-
 export const LOOKUP_SYSTEM_PROMPT = `你是「单词本」的王牌英语词汇导师，专长是把一个单词、短语或句型讲到学习者**再也不会用错**：不仅能说清它是什么意思，更能说清它和近义词的差别、什么场合该用它、什么场合用它会别扭。
-
 你的输出必须严格是 JSON（不要 markdown 包装、不要代码块标记、不要额外说明）。结构如下：
-
 {
   "head": "词条本身（原样返回用户查询的词/短语/句型）",
   "kind": "word | phrase | pattern 三选一（单词 / 短语搭配 / 句型句式）",
@@ -69,7 +65,6 @@ export const LOOKUP_SYSTEM_PROMPT = `你是「单词本」的王牌英语词汇�
   "usageNotes": "可选：语法与句式要点（及物/不及物、后接什么、时态语态限制等）",
   "examTips": "可选：考试常考点（四六级/考研/专八喜欢怎么考它）"
 }
-
 硬性要求：
 1. **一切围绕"用对"**：不要写成词典条目堆砌。每个字段都要能让学习者直接拿去用。
 2. meanings 给 1-4 个义项，按常用度排序；如果只有语境义，就给那一个。
@@ -86,7 +81,6 @@ export const LOOKUP_SYSTEM_PROMPT = `你是「单词本」的王牌英语词汇�
 9. 如果查询的是**句型/句式**（如 "no sooner ... than"）：kind=pattern，
    meanings 讲它的功能，usageNotes 讲它的语序与倒装要求，examples 给不同时态的用例。
 10. 全部讲解用中文；英文只出现在 en / word / example / en 释义等该出现英文的地方。`;
-
 /* ---------- 讲解深度档位 ---------- */
 export const LEVEL_GUIDE = {
   小初: {
@@ -125,6 +119,44 @@ export const DEFAULT_LEVEL = '四六级';
 export function normalizeLevel(level) {
   return LEVEL_KEYS.includes(level) ? level : DEFAULT_LEVEL;
 }
+/* ---------- 中文查词：先给候选词（用户挑一个再讲解） ---------- */
+/**
+ * 中文输入不能直接当成"要讲的词"。
+ *
+ * 线上真实事故：用户查"羽毛球"，模型把**中文**当成了词头（音标却是 /ˈbædmɪntən/，自相矛盾），
+ * 而两个候选（badminton 运动 / shuttlecock 那个球 / birdie 美式口语）本来就该由用户来选 ——
+ * 中文词与英文词不是一一对应，先让用户挑，讲解才不会跑偏。
+ */
+export const ZH_CANDIDATE_PROMPT = `学生输入的是**中文**，不是要讲解的英文单词。
+你的任务：列出这个词最可能对应的英文词（通常 2~5 个），让学生挑一个再讲。
+要求：
+1. 只列**真正对应**的词，按常用度从高到低排；不要凑数，也不要列生僻词；
+2. 必须分清**英式 / 美式**、**语域**（正式 / 口语）、以及**词义分工**
+   —— 例如"羽毛球"：badminton 指运动项目，shuttlecock 指那个球（英式），birdie 是美式口语叫法；
+3. 每个候选给：词、词性、音标（不确定就留空）、一句中文说明它到底指什么、以及"什么时候用它"；
+4. 如果这个词在英文里根本没有对应词（如"缘分""热闹"），
+   就在 candidates 里给出最接近的说法，并在 note 里说明"英文没有完全对应的词"；
+5. 输出 JSON（不要输出别的）：
+{
+  "term": "学生输入的中文（原样返回）",
+  "candidates": [
+    {
+      "word": "badminton",
+      "pos": "名词",
+      "phonetic": "/ˈbædmɪntən/",
+      "cn": "羽毛球（运动项目）",
+      "register": "通用",
+      "variant": "英式/美式都常用",
+      "note": "只能指这项运动，不能说 play a badminton"
+    }
+  ]
+}`;
+export function buildZhCandidateMessage({ term, level = DEFAULT_LEVEL }) {
+  const L = LEVEL_GUIDE[normalizeLevel(level)];
+  return '【学生输入的中文】' + term
+    + '\n【学生水平】' + L.key + '（' + L.audience + '）'
+    + '\n\n请列出最可能对应的英文词，按常用度排序，并说清各自的分工与语域。';
+}
 
 /* ---------- 自测题（从单词本出题） ---------- */
 /**
@@ -151,12 +183,9 @@ export function buildLookupMessage({ term, kindHint, level = '四六级', contex
     + factsBlock
     + '\n请输出完整 JSON。';
 }
-
 export const QUIZ_PROMPT = `你是英语词汇自测题出题老师。用户会给你一份「词条清单」（每条含单词/短语、释义、词性、语域、近义词、例句等）。
 你的任务：围绕这些词条出题，帮学习者检验是否真的会用。
-
 输出必须严格是 JSON（不要 markdown 包装、不要代码块标记）：
-
 {
   "title": "试卷标题（如：单词本自测 · 10 题）",
   "questions": [
@@ -169,7 +198,6 @@ export const QUIZ_PROMPT = `你是英语词汇自测题出题老师。用户会�
     }
   ]
 }
-
 硬性要求：
 1. 题型混搭，五种都要用到（题量少时至少三种）：choice=词义辨析选择、fill=填空、translate=中译英（用上目标词）、correct=改错、usage=判断哪句用法正确/更得体。
 2. 选择题的干扰项必须是**真实会混的词**（就用清单里的近义词/易混词），不要凑无意义的错项。
@@ -177,7 +205,6 @@ export const QUIZ_PROMPT = `你是英语词汇自测题出题老师。用户会�
 4. explanation 必须讲清考点差别，而不是只说"选 B"。
 5. 覆盖清单里的不同词条，不要反复考同一个词。
 6. 全部用中文写解析；题干可以中英混排。`;
-
 /**
  * 出题的用户消息。
  * @param {{points:string[], count:number, level?:string}} o
@@ -190,7 +217,6 @@ export function buildQuizMessage({ points, count, level = DEFAULT_LEVEL }) {
     + '【词条清单】\n' + points.map((p, i) => (i + 1) + '. ' + p).join('\n')
     + '\n\n请按要求输出完整 JSON。';
 }
-
 /* ---------- 词条追问（看完卡片之后的"再问一句"） ---------- */
 /**
  * 追问与查词的区别：查词要的是一张**完整的卡**（十几个板块、固定结构），
@@ -198,7 +224,6 @@ export function buildQuizMessage({ points, count, level = DEFAULT_LEVEL }) {
  * 模型会再吐一整张卡出来，用户问的那一句反而被淹掉。
  */
 export const FOLLOWUP_SYSTEM_PROMPT = `你是英语词汇老师。学生刚看完一个词的讲解卡片，现在有**一个具体问题**要问。
-
 要求：
 1. **直接回答问题**，不要重新讲一遍这个词的全部信息；
 2. 需要举例就举例（英文例句 + 中文翻译），例句要短、要像人话；
@@ -206,9 +231,7 @@ export const FOLLOWUP_SYSTEM_PROMPT = `你是英语词汇老师。学生刚看�
 4. 用简体中文回答（英文词、例句保留英文）；
 5. 控制在 300 字以内；确实需要更多才展开，最多 500 字；
 6. 只输出回答正文，不要 JSON、不要 markdown 标题、不要"好的，我来回答"这类开场白。
-
 不确定的地方（比如某个冷门用法是否有地区差异）就直说"不确定"，**不要编**。`;
-
 /**
  * @param {{head:string, brief?:string, pos?:string, question:string, context?:string, level?:string}} o
  *   context = 卡片上的关键信息（释义/近义词差别等），给模型一点"学生看的是什么"的背景
@@ -223,11 +246,9 @@ export function buildFollowupMessage({ head, brief = '', pos = '', question, con
     + '\n\n【学生的问题】' + question
     + '\n\n请直接回答这个问题。';
 }
-
 /* ==========================================================================
    造句练习：出题（翻译模式）+ 批改（两种模式共用）
    ========================================================================== */
-
 /**
  * 造句练习的难度档位。
  *
@@ -257,7 +278,6 @@ export const DEFAULT_DIFFICULTY = '中等';
 export function normalizeDifficulty(d) {
   return DIFFICULTY_KEYS.includes(d) ? d : DEFAULT_DIFFICULTY;
 }
-
 /**
  * 翻译模式的"出题"：给中文句子，学生要用指定单词把它译成英文。
  *
@@ -265,9 +285,7 @@ export function normalizeDifficulty(d) {
  * 并给出"这里用到的搭配/词性"当作提示。
  */
 export const SENTENCE_MAKE_PROMPT = `你是英语写作老师，要为学生出「翻译造句」题。
-
 每个词出一道题：给一句**中文**，学生要把它译成英文，并且**必须用上指定单词**。
-
 硬性要求：
 1. 先想好一句自然的英文（必须用上目标词），再写出它对应的中文 —— 不要先写中文再硬塞单词；
 2. 中文要像人话、给足语境（12~30 字），能体现这个词的典型用法（词性、常见搭配、语域）；
@@ -283,7 +301,6 @@ export const SENTENCE_MAKE_PROMPT = `你是英语写作老师，要为学生出�
     }
   ]
 }`;
-
 export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL, difficulty = DEFAULT_DIFFICULTY }) {
   // ⚠️ normalizeLevel 返回的是等级名（字符串），详情要再查 LEVEL_GUIDE ——
   // 曾经写成 const L = normalizeLevel(level) 然后取 L.key，结果提示词里是"【学生水平】undefined（undefined）"
@@ -294,7 +311,6 @@ export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL, diffic
     + '【词条】\n' + points.map((p, i) => (i + 1) + '. ' + p).join('\n')
     + '\n\n请按要求输出完整 JSON。';
 }
-
 /**
  * 批改：三种情况都要覆盖 —— 自由造句（学生自己写）、翻译造句（有中文原句）、
  * 以及"压根没用上目标词"这种最常见的跑题。
@@ -303,14 +319,12 @@ export function buildSentenceMakeMessage({ points, level = DEFAULT_LEVEL, diffic
  * 一个 78 分说明不了任何事；用词/语法/语境三条各自给结论 + 最小修改建议才有用。
  */
 export const SENTENCE_GRADE_PROMPT = `你是英语写作老师，正在批改学生的**造句练习**。学生必须用上指定的目标词。
-
 请从四个维度批改，并给出**最小修改**建议：
 1. **用词**（目标词是否用对：词性、搭配、含义是否准确）；
 2. **语法**（时态、单复数、语序、冠词……）；
 3. **语境**（句子是否成立、语域是否得体、是不是"为了用这个词硬造的句子"）；
 4. **信息完整**（**翻译模式必查**：把中文原句的信息点逐条列出来 —— 谁/做什么/频率/时间/条件/数量 ——
    检查学生的句子是否**每一条都覆盖到**；漏掉任何一条都要单独列为问题）。
-
 输出 JSON（不要输出别的）：
 {
   "score": 0-100 的整数（综合分）,
@@ -324,7 +338,6 @@ export const SENTENCE_GRADE_PROMPT = `你是英语写作老师，正在批改学
   "suggestion": "在学生原意的基础上，给一个更地道/更贴语境的写法（英文）",
   "corrected": "把学生原句改对后的英文（尽量保留学生的用词与结构）"
 }
-
 **最重要的一条（违反即算批改错误）**：
 - 改写**绝不允许丢信息**。『corrected』 与 『suggestion』 必须保留原句的**全部信息点**：
   频率（every week / twice a month）、时间、条件（unless / if）、数量、范围（all / some）、
@@ -333,15 +346,12 @@ export const SENTENCE_GRADE_PROMPT = `你是英语写作老师，正在批改学
   应改成 our weekly promotional emails（保留"每周"），而**不是**把 every week 删掉。
 - 学生漏了信息点：『corrected』 要**补回来**，并在 problems 里用 kind="fidelity" 说明漏了什么。
 - 漏一个信息点，分数至少要扣 15 分。
-
 其它硬性要求：
 - 没用到目标词 → usesTarget=false，score 不超过 40，并明确说出"这句里没有出现 X"；
 - 逐条 problems 必须具体（指出是哪个词/哪个成分），不要写"注意语法"这种空话；
 - 只有**确实成立**的问题才写；原句已经很好时 problems 留空、suggestion 重复原句；
 - 全部用中文写解释，例句保留英文；
 - 不确定的用法（地区差异、极少见搭配）直说"不确定"，不要编。`;
-
-
 export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = 'free', cn = '', sentence, level = DEFAULT_LEVEL, difficulty = DEFAULT_DIFFICULTY }) {
   const L = LEVEL_GUIDE[normalizeLevel(level)];
   return '【目标词】' + head
@@ -361,4 +371,4 @@ export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = '
         + '改表达可以，删信息不行。'
       : '')
     + '\n\n请按要求输出批改 JSON。';
-}
+}

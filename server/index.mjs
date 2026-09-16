@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as dnsLookup } from 'node:dns';
 
-import { normalizeDifficulty, LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
-import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, attachDict } from './resultShape.mjs';
+import { normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
@@ -407,6 +407,30 @@ function applyDict(entry, dictResult) {
   return attachDict(corrected, facts, conflicts);
 }
 
+/**
+ * 中文查词：先给候选词，用户挑一个再走正常的查词讲解。
+ * 复用 lookup 的任务与轮询通道（同一个 job 类型），前端按 data.candidates 是否存在来区分。
+ */
+async function runZhJob(jobId, { term, level, baseUrl, model, apiKey }) {
+  const job = await findJob(jobId);
+  if (!job) return;
+  job.status = 'running';
+  job.updatedAt = Date.now();
+  saveJob(job);
+  const raw = await callLLM({
+    baseUrl, model, apiKey,
+    system: ZH_CANDIDATE_PROMPT,
+    user: buildZhCandidateMessage({ term, level }),
+    maxTokens: 2000,
+  });
+  const parsed = sanitizeZhCandidates(parseJsonLoose(raw));
+  if (!parsed.candidates.length) throw new Error('没找出对应的英文词，换个更具体的说法再试');
+  job.data = { term: parsed.term || term, candidates: parsed.candidates };
+  job.status = 'done';
+  job.updatedAt = Date.now();
+  saveJob(job);
+}
+
 async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
@@ -762,6 +786,19 @@ const server = http.createServer(async (req, res) => {
       }
 
       const jobId = randomUUID();
+      // 中文输入 → 先给候选词。中文词与英文词不是一一对应，直接当成词头来讲解必然跑偏
+      // （线上真实事故：查"羽毛球"时词头是中文，音标却是 /ˈbædmɪntən/，自相矛盾）
+      if (body.zh === true) {
+        saveJob({ jobId, kind: 'lookup', title: term + ' · 找对应词', status: 'pending', createdAt: Date.now(), data: null, error: null });
+        safeRun('lookup', jobId, () => runZhJob(jobId, {
+          term,
+          level: normalizeLevel(body.level),
+          baseUrl: ep.baseUrl,
+          model: String(body.model || '').trim() || stat.model(),
+          apiKey: ep.apiKey,
+        }));
+        return json(res, 200, { ok: true, jobId, status: 'pending' });
+      }
       saveJob({ jobId, kind: 'lookup', title: term, status: 'pending', createdAt: Date.now(), data: null, error: null });
       safeRun('lookup', jobId, () => runLookupJob(jobId, {
         term,

@@ -1154,3 +1154,27 @@ body.drawer-open { overflow: hidden; }
 .sb-verdict.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
 .sb-verdict:not(.clamp) { cursor: pointer; }
 @media (pointer: coarse) { .sb-ops .icon-btn { min-width: 40px; min-height: 40px; } }
+
+/* ---------- 中文查词：先选词 ---------- */
+.zh-picker { display: flex; flex-direction: column; gap: 10px; }
+.zh-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.zh-item {
+  width: 100%; display: grid; grid-template-columns: auto auto auto 1fr auto;
+  align-items: center; gap: 8px 10px; text-align: left;
+  padding: 11px 13px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); cursor: pointer;
+}
+.zh-item:hover { border-color: var(--brand); background: var(--info-bg); }
+.zh-item.last { border-color: var(--brand); }
+.zh-word { font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+.zh-cn { color: var(--muted); font-size: 13.5px; }
+.zh-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.zh-arrow { color: var(--muted); }
+.zh-item:hover .zh-arrow { color: var(--brand); }
+.zh-note { grid-column: 1 / -1; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.chip.tiny { font-size: 11.5px; padding: 1px 7px; }
+.chip.tiny.gold { color: var(--gold); border-color: var(--gold); }
+@media (max-width: 620px) {
+  .zh-item { grid-template-columns: auto auto 1fr auto; }
+  .zh-cn { grid-column: 1 / -1; }
+}

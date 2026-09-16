@@ -11,13 +11,14 @@ import { useBooks } from './hooks/useBooks.js'
 import { useCloud } from './hooks/useCloud.js'
 import { useAuth } from './hooks/useAuth.js'
 import {
-  SENTENCE_PREF_KEY, SIDE_STATE_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet,
+  SENTENCE_PREF_KEY, SIDE_STATE_KEY, ZH_PICK_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet,
   safeSet,
   saveFollowups, saveSettings, saveSpell, saveTheme,
 } from './storage.js'
 import { applyTheme } from './theme.js'
 import { toTop } from './scroll.js'
 import { findBookByHead, findEntryBook } from './wordbook.js'
+import { hasCJK } from './format.js'
 import { headKey, killedSet, nextDueAt } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
 import PrintSheet from './components/PrintSheet.jsx'
@@ -40,6 +41,7 @@ import SafetyBanner from './components/SafetyBanner.jsx'
 import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
+import ZhPicker from './components/ZhPicker.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
 const QUIZ_COUNTS = [5, 10, 15, 20]
@@ -158,6 +160,9 @@ export default function App() {
     try { return JSON.parse(safeGet(SENTENCE_PREF_KEY, '{}')).difficulty || '中等' } catch { return '中等' }
   })
   const [sentenceBookOpen, setSentenceBookOpen] = useState(false)
+  /* 中文查词：先给候选词，用户挑一个再讲解 */
+  const [zhQuery, setZhQuery] = useState('')
+  const [zhCandidates, setZhCandidates] = useState([])
   const [savedSentenceIds, setSavedSentenceIds] = useState([])
   useEffect(() => {
     safeSet(SENTENCE_PREF_KEY, JSON.stringify({ count: sentenceCount, difficulty: sentenceDifficulty }))
@@ -378,9 +383,40 @@ export default function App() {
   }, [killed, revived, entries, favorites])
 
   /* ---------- 查词（核心链路：提交 → 轮询 → 卡片） ---------- */
+  /** 中文查词第一步：只取候选词，不讲解（挑完再走查词） */
+  const runZhLookup = async (q) => {
+    setError(''); setBusy(true); setEntry(null); setProgress('正在找对应的英文词…')
+    setZhQuery(q); setZhCandidates([]); setView('zh')
+    try {
+      const out = await submitAndPoll({
+        submit: () => lookup({ term: q, zh: true, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
+        fetchJob: getLookupJob,
+        intervalMs: POLL_LOOKUP_MS,
+        timeoutMs: TIMEOUT_LOOKUP_MS,
+        maxFailures: POLL_MAX_FAILURES,
+        netError: '网络不稳定，没拿到候选词，请重试',
+        timeoutError: '等待超时，稍后再点一次「查一下」即可',
+        isAlive: () => aliveRef.current,
+        onProgress: () => setProgress('AI 正在找对应的英文词…'),
+      })
+      if (out.aborted) return
+      const list = (out.data && out.data.candidates) || []
+      if (!list.length) throw new Error('没找出对应的英文词 —— 换个更具体的说法再试（比如"羽毛球拍"）')
+      setZhCandidates(list)
+      setProgress('')
+    } catch (e) {
+      setError(e.message || '找词失败')
+      setProgress('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const runLookup = async (term, { saveToBookId } = {}) => {
     const q = String(term || '').trim()
     if (!q) { setError('请先输入要查的单词或短语'); return }
+    // 中文输入 → 先给候选词（中文词与英文词不是一一对应，直接讲解会得到自相矛盾的卡片）
+    if (hasCJK(q)) { await runZhLookup(q); return }
     setError(''); setBusy(true); setEntry(null); setProgress('正在提交…')
     try {
       const out = await submitAndPoll({
@@ -800,6 +836,18 @@ export default function App() {
     setSentenceMode(item.mode === 'translate' && item.cn ? 'translate' : 'free')
     setSentenceIndex(0); setSentenceGrade(null); setSentenceError(''); setView('sentence')
   }
+  /** 用户在候选里挑了一个词：记下"上次选的是它"，然后走正常查词 */
+  const pickZhWord = (word) => {
+    try {
+      const map = JSON.parse(safeGet(ZH_PICK_KEY, '{}'))
+      map[zhQuery] = word
+      safeSet(ZH_PICK_KEY, JSON.stringify(map))
+    } catch { /* 存不下就算了，不影响查词 */ }
+    setQuery(word)
+    setView('search')
+    runLookup(word)
+  }
+
   const nextSentence = () => { setSentenceGrade(null); setSentenceIndex((i) => i + 1) }
   const exitSentence = () => { setView('search'); setSentenceItems([]); setSentenceGrade(null); setSentenceError('') }
 
@@ -936,6 +984,11 @@ export default function App() {
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
             onSpellWrong={noteSpellWrong}
             onReveal={() => setRevealed(true)} onGrade={grade} onKill={killCurrent} onExit={exitReview} />
+        ) : view === 'zh' ? (
+          <ZhPicker term={zhQuery} items={zhCandidates} busy={busy} error={error}
+            lastPick={(() => { try { return JSON.parse(safeGet(ZH_PICK_KEY, '{}'))[zhQuery] || '' } catch { return '' } })()}
+            onPick={(c) => pickZhWord(c.word)}
+            onCancel={() => { setView('search'); setError(''); setProgress('') }} />
         ) : view === 'sentence' ? (
           <SentencePane
             items={sentenceItems} index={sentenceIndex} mode={sentenceMode} setMode={setSentenceMode}

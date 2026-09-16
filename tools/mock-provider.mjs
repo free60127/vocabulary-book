@@ -142,6 +142,18 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
           corrected: used ? sentence : 'I want to use ' + head + ' in a sentence.',
         }) } }] });
       }
+      // 中文查词：给候选词（真实链路里也是先选词再讲解）
+      if (/【学生输入的中文】/.test(b) && /candidates/.test(b)) {
+        const zh = (/【学生输入的中文】([^\n\\]+)/.exec(b) || [])[1] || '羽毛球';
+        return send(200, { choices: [{ message: { content: JSON.stringify({
+          term: zh,
+          candidates: [
+            { word: 'badminton', pos: '名词', phonetic: '/ˈbædmɪntən/', cn: '羽毛球（运动项目）', register: '通用', variant: '英式/美式常用', note: '只能指运动，不说 play a badminton' },
+            { word: 'shuttlecock', pos: '名词', phonetic: '/ˈʃʌtlkɒk/', cn: '羽毛球（那个球）', register: '通用', variant: '英式', note: '指实物；能 play 的是 badminton，能 hit 的是 shuttlecock' },
+            { word: 'birdie', pos: '名词', phonetic: '/ˈbɜːdi/', cn: '羽毛球（美式口语）', register: '口语', variant: '美式', note: '球场闲聊可用；写作一律用 shuttlecock' },
+          ],
+        }) } }] });
+      }
       if (term === '__error__') return send(500, { error: { message: 'mock upstream exploded' } });
       if (term === '__garbage__') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
       const payload = isQuiz ? QUIZ : (term === '__huge__' ? hugeEntry(term) : entryFor(term));

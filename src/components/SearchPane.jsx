@@ -24,7 +24,7 @@ export default function SearchPane({
         <input className="search-input" ref={searchRef} value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onLookup(query); }}
-          placeholder="输入单词、短语或句型，回车生成讲解（如 object / pull off / no sooner ... than）" />
+          placeholder="输入单词、短语或句型，回车生成讲解（如 object / pull off / no sooner ... than）· 中文也行（会先让你选对应的英文词）" />
         <select className="ocr-mode" value={level} onChange={(e) => setLevel(e.target.value)} title="讲解深度">
           {levels.map((l) => <option key={l} value={l}>{l}</option>)}
         </select>

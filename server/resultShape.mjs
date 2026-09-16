@@ -276,6 +276,32 @@ export function sanitizeFollowup(raw) {
   return text.slice(0, 4000).trim();
 }
 
+/* ---------- 中文查词候选 ---------- */
+
+/** 候选词：必须有英文词，且去掉重复（同一个词只留第一条） */
+export function sanitizeZhCandidates(raw) {
+  const src = isPlainObject(raw) ? raw : {};
+  const seen = new Set();
+  const candidates = (Array.isArray(src.candidates) ? src.candidates : [])
+    .filter(isPlainObject).slice(0, 12)
+    .map((it) => {
+      const word = boundedString(it.word, 80).trim();
+      if (!word || seen.has(word.toLowerCase())) return null;
+      seen.add(word.toLowerCase());
+      return {
+        word,
+        pos: boundedString(it.pos, 40).trim(),
+        phonetic: boundedString(it.phonetic, 80).trim(),
+        cn: boundedString(it.cn, 200).trim(),
+        register: boundedString(it.register, 40).trim(),
+        variant: boundedString(it.variant, 60).trim(),
+        note: boundedString(it.note, 400).trim(),
+      };
+    })
+    .filter(Boolean);
+  return { term: boundedString(src.term, 80).trim(), candidates };
+}
+
 /* ---------- 造句练习：出题与批改的形状清洗 ---------- */
 
 /** 翻译模式的题目：每题必须有词头与中文句子，缺一不可（缺了没法练） */

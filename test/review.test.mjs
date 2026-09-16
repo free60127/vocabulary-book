@@ -12,9 +12,10 @@ import {
   mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
   spellHint, summarizeStreak, wrongList,
 } from '../src/review.js';
-import { sanitizeFollowup, sanitizeSentenceGrade } from '../server/resultShape.mjs';
+import { sanitizeFollowup, sanitizeSentenceGrade, sanitizeZhCandidates } from '../server/resultShape.mjs';
+import { hasCJK } from '../src/format.js';
 import { mergeSentences, localSnapshot } from '../src/storage.js';
-import { SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, buildSentenceMakeMessage, DIFFICULTY_KEYS, normalizeDifficulty, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage } from '../server/prompt.mjs';
+import { ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, buildSentenceMakeMessage, DIFFICULTY_KEYS, normalizeDifficulty, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage } from '../server/prompt.mjs';
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -403,6 +404,31 @@ console.log('\n' + '='.repeat(62));
     const snap = localSnapshot({ sentences: [mk('a', 80, 'x')], deletedSentences: ['z'] });
     return snap.sentences.length === 1 && snap.deletedSentences.join() === 'z';
   })());
+}
+
+
+/* ---------- 中文查词：先给候选词 ---------- */
+{
+  const zh = sanitizeZhCandidates({
+    term: '羽毛球',
+    candidates: [
+      { word: 'badminton', pos: '名词', phonetic: '/ˈbædmɪntən/', cn: '羽毛球（运动）', variant: '通用' },
+      { word: 'BADMINTON', cn: '重复的（大小写不同也要去掉）' },
+      { word: '', cn: '空词头' },
+      { word: 'shuttlecock', cn: '羽毛球（那个球）', variant: '英式' },
+      { word: 'birdie', cn: '羽毛球（美式口语）', register: '口语', note: '写作别用' },
+    ],
+  });
+  check('中文查词：候选去重、空词头丢掉', zh.candidates.map((x) => x.word).join('/') === 'badminton/shuttlecock/birdie', zh.candidates.map((x) => x.word).join('/'));
+  check('中文查词：保留英式/美式与语域信息', zh.candidates[1].variant === '英式' && zh.candidates[2].register === '口语');
+  check('中文查词：原样带回中文词', zh.term === '羽毛球');
+  check('中文检测：中文命中、英文不命中',
+    hasCJK('羽毛球') === true && hasCJK('badminton') === false && hasCJK('pull off') === false && hasCJK('no sooner ... than') === false);
+  check('中文检测：全角字母也算（用户输入法切错了也能兜住）', hasCJK('ｈｅｌｌｏ') === true);
+  check('候选提示词说清"中文与英文不是一一对应"', /不是一一对应|不是要讲解的英文单词/.test(ZH_CANDIDATE_PROMPT));
+  check('候选提示词给了 badminton / shuttlecock 的分工例子', /badminton 指运动项目/.test(ZH_CANDIDATE_PROMPT));
+  const msg = buildZhCandidateMessage({ term: '羽毛球', level: '四六级' });
+  check('候选请求带上了中文词与学生水平', /羽毛球/.test(msg) && /四六级/.test(msg) && !/undefined/.test(msg));
 }
 
 const failed = results.filter((r) => !r.ok);

@@ -24,6 +24,8 @@ export const KILLED_KEY = 'vb-killed';
 export const REVIVED_KEY = 'vb-revived';
 /** 拼写模式开关 */
 export const SPELL_KEY = 'vb-spell';
+/** 中文查词：记下"这个中文上次选的是哪个英文词"（下次排在最前） */
+export const ZH_PICK_KEY = 'vb-zh-picks';
 /** 错句本：自己收藏的造句练习（含批改结果） */
 export const SENTENCES_KEY = 'vb-sentences';
 /** 删掉的句子 id（云同步时需要墓碑，否则删了的句子会被另一台设备带回来） */

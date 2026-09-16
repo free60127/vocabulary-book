@@ -284,6 +284,38 @@ async function runProfile(browser, p) {
       check(p.id, '卡片上的表单控件够高', card.lowFieldCount === 0, short(card.lowField));
     }
 
+    at('中文查词');
+    /* ---------- 1a2. 中文输入 → 先给候选词，挑一个再讲解 ----------
+       线上真实事故：查"羽毛球"时词头直接是中文，音标却是 /ˈbædmɪntən/，自相矛盾。 */
+    {
+      await page.fill('.search-input', '羽毛球');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.zh-picker', { timeout: 60000 });
+      // ⚠️ 面板先出来、候选是异步到的：必须等条目渲染出来再断言，否则读到的是"正在找词…"的空列表
+      await page.waitForSelector('.zh-item', { timeout: 60000 });
+      await page.waitForTimeout(300);
+      const cand = await page.evaluate(() => ({
+        words: [...document.querySelectorAll('.zh-item .zh-word')].map((x) => x.textContent.trim()),
+        notes: [...document.querySelectorAll('.zh-item .zh-note')].map((x) => x.textContent.trim()),
+        hasVariant: /英式|美式/.test(document.querySelector('.zh-picker')?.innerText || ''),
+      }));
+      check(p.id, '中文查词先列候选词（不是直接把中文当词头）', cand.words.length >= 2 && cand.words.includes('badminton'), cand.words.join('/'));
+      check(p.id, '候选里说清了英式/美式或语域的分工', cand.hasVariant, JSON.stringify(cand).slice(0, 160));
+      await auditShot('zh-picker');
+      // 选第一个 → 走正常查词讲解
+      await page.locator('.zh-item').first().click();
+      await page.waitForFunction(() => document.querySelector('.entry-card h1')?.textContent?.trim().length > 0, null, { timeout: 60000 });
+      const picked = await page.evaluate(() => ({
+        // h1 里除了词头还有音标（.phonetic），取第一个文本节点才是词头
+        head: (document.querySelector('.entry-card h1')?.childNodes[0]?.textContent || '').trim(),
+        query: document.querySelector('.search-input')?.value || '',
+        last: JSON.parse(localStorage.getItem('vb-zh-picks') || '{}')['羽毛球'] || '',
+      }));
+      check(p.id, '挑完直接出这个英文词的完整卡片（词头是英文）', /^[A-Za-z]/.test(picked.head), picked.head);
+      check(p.id, '搜索框回填成选中的英文词', picked.query === picked.head, JSON.stringify(picked));
+      check(p.id, '记住"这个中文上次选的是哪个词"', picked.last === picked.head, picked.last);
+    }
+
     at('超长连写内容');
     /* ---------- 1b. 长 token 不能把页面撑宽 ---------- */
     await page.fill('.search-input', '__huge__');
