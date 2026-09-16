@@ -15,7 +15,7 @@ import {
 export default function Topbar({
   sidebarOpen, onToggleSidebar, dueCount, onStartReview, nextDue,
   onOpenQuiz, quizDisabled, onOpenSentence, sentenceDisabled, account, onOpenAuth,
-  status, hasKey, stats, streak, syncCode, lastSyncAt,
+  status, statusChecking, onRetryStatus, hasKey, stats, streak, syncCode, lastSyncAt,
   onOpenSettings, onOpenBackup, onOpenFavorites, favoritesCount, onOpenKilled, killedCount,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -31,9 +31,14 @@ export default function Topbar({
     return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
   }, [menuOpen]);
 
+  /**
+   * 三态：探活中 / 已连接 / 真失败。
+   * 之前只有两态，冷启动（免费实例休眠 30~60 秒才醒）会被直接说成"后端未连接"，
+   * 而它其实只是还没醒 —— 用户看到的就是"明明能查词，却一直说未连接"。
+   */
   const statusText = status
     ? (hasKey ? 'AI 已配置' : (status.hasKey ? '需要你自己的 Key' : '未配置 API Key'))
-    : '后端未连接';
+    : (statusChecking ? '正在连接后端…' : '后端未连接 · 点这里重试');
   const dueTitle = nextDue
     ? `今天到期 ${dueCount} 个；下一次：${new Date(nextDue).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}`
     : `今天到期 ${dueCount} 个`;
@@ -66,14 +71,16 @@ export default function Topbar({
         ? <button className="ghost-btn desktop-only" onClick={onOpenAuth} title={account.email}><LogIn size={15} />{account.email.split('@')[0]}</button>
         : <button className="ghost-btn desktop-only" onClick={onOpenAuth}><LogIn size={15} />登录</button>}
 
-      <div className="status-chip" title={status ? status.model + ' @ ' + status.baseUrl : '后端未连接'}>
-        <span className={'dot ' + (status ? 'ok' : 'err')} />
+      <button className={'status-chip' + (status ? '' : ' warn')}
+        onClick={onRetryStatus}
+        title={status ? status.model + ' @ ' + status.baseUrl : '还没连上后端：点一下立刻重试（免费实例休眠后需要 30~60 秒唤醒）'}>
+        <span className={'dot ' + (status ? 'ok' : statusChecking ? 'wait' : 'bad')} />
         <span className="chip-text">{statusText}</span>
         <span className="chip-detail">
           {stats.entries} 个词条 · 连续 {streak.current} 天
           {syncCode ? ` · 同步 ${lastSyncAt ? new Date(lastSyncAt).toTimeString().slice(0, 5) : '未同步'}` : ''}
         </span>
-      </div>
+      </button>
 
       {/* 手机端：其余入口收进「更多」 */}
       <div className="topbar-more" ref={wrapRef}>
@@ -93,7 +100,7 @@ export default function Topbar({
             <button role="menuitem" onClick={run(onOpenSettings)}><Settings size={15} />AI 设置</button>
             <button role="menuitem" onClick={run(onOpenBackup)}><Cloud size={15} />备份 / 同步</button>
             <div className="more-menu-info">
-              <span className={'dot ' + (status ? 'ok' : 'err')} />
+              <span className={'dot ' + (status ? 'ok' : statusChecking ? 'wait' : 'bad')} />
               <span>{statusText}</span>
               <em>{stats.entries} 个词条 · 连续 {streak.current} 天{syncCode ? ` · 同步 ${lastSyncAt ? new Date(lastSyncAt).toTimeString().slice(0, 5) : '未同步'}` : ''}</em>
             </div>

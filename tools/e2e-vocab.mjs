@@ -18,9 +18,11 @@ import { requirePlaywright } from './playwright.mjs';
 const { chromium } = await requirePlaywright();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const PORT = Number(process.env.E2E_PORT || 8811);
-const MOCK = Number(process.env.E2E_MOCK || 9811);
-const DICT_MOCK = Number(process.env.E2E_DICT_MOCK || 9812);
+// 端口随机取一段：固定端口会和别的项目/别的会话撞车（姊妹项目的 e2e 也用 88xx/98xx）
+const PORT_BASE = Number(process.env.E2E_PORT_BASE || (24000 + Math.floor(Math.random() * 2000)));
+const PORT = Number(process.env.E2E_PORT || PORT_BASE);
+const MOCK = Number(process.env.E2E_MOCK || (PORT_BASE + 1));
+const DICT_MOCK = Number(process.env.E2E_DICT_MOCK || (PORT_BASE + 2));
 const BASE = `http://127.0.0.1:${PORT}/`;
 
 /* ---------- mock 模型：查词返回词条，出题返回题目 ---------- */

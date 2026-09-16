@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getStatus, lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob, sentencePractice, getSentenceJob } from './api.js'
+import { lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob, sentencePractice, getSentenceJob } from './api.js'
 import {
   POLL_LOOKUP_MS, POLL_QUIZ_MS, POLL_FOLLOWUP_MS, POLL_SENTENCE_MS, TIMEOUT_LOOKUP_MS,
   TIMEOUT_QUIZ_MS, TIMEOUT_FOLLOWUP_MS, TIMEOUT_SENTENCE_MS, POLL_MAX_FAILURES,
@@ -19,6 +19,7 @@ import { applyTheme } from './theme.js'
 import { toTop } from './scroll.js'
 import { findBookByHead, findEntryBook } from './wordbook.js'
 import { hasCJK } from './format.js'
+import { useBackendStatus } from './hooks/useBackendStatus.js'
 import { headKey, killedSet, nextDueAt } from './review.js'
 import { FILTERS, SORTS, filterEntries, sortEntries } from './filterSort.js'
 import PrintSheet from './components/PrintSheet.jsx'
@@ -86,7 +87,8 @@ export default function App() {
   // ⚠️ 必须走 safeGet：Safari 无痕 / 关闭站点数据时裸调 localStorage 会抛 SecurityError，
   // 而这里在**首次 render 的惰性初始化**里 —— 一抛就是整页白屏。
   const [level, setLevel] = useState(() => safeGet('vb-level', '') || '四六级')
-  const [status, setStatus] = useState(null)
+  /* 后端状态：会退避重试、切回页面重试，并且任何一次真实请求成功都会立刻纠正它 */
+  const { status, checking: statusChecking, retry: retryStatus, markUp: markBackendUp } = useBackendStatus()
 
   /* ---------- 界面状态 ---------- */
   const [view, setView] = useState('search')          // search | review | book | quiz
@@ -217,7 +219,6 @@ export default function App() {
   useEscape(() => setKilledOpen(false), killedOpen)
   useEscape(() => setWrongOpen(false), wrongOpen)
 
-  useEffect(() => { getStatus().then(setStatus).catch(() => setStatus(null)) }, [])
   useEffect(() => { safeSet('vb-level', level) }, [level])
   /* 主题：写 <html data-theme>；选"跟随系统"时，系统主题变了要立刻跟上 */
   useEffect(() => {
@@ -395,6 +396,7 @@ export default function App() {
         onProgress: () => setProgress('AI 正在找对应的英文词…'),
       })
       if (out.aborted) return
+      markBackendUp()
       const list = (out.data && out.data.candidates) || []
       if (!list.length) throw new Error('没找出对应的英文词 —— 换个更具体的说法再试（比如"羽毛球拍"）')
       setZhCandidates(list)
@@ -429,6 +431,7 @@ export default function App() {
       const e = out.data && out.data.entry
       if (!e) throw new Error('模型没有返回词条，请重试')
       setEntry(e); setView('search'); setProgress('')
+      markBackendUp()          // 这次查词成功 = 后端活着（比探活更可信）
       // 新卡片顶到最上面：不然用户还停在上一屏（引导说明那一块），
       // 得自己往下滚才看得到刚查到的词
       requestAnimationFrame(() => toTop({ smooth: false }))
@@ -925,6 +928,8 @@ export default function App() {
   const topbarProps = {
     sidebarOpen, onToggleSidebar: toggleSidebar,
     dueCount: due.length, onStartReview: startReview, nextDue,
+    statusChecking,
+    onRetryStatus: retryStatus,
     onOpenQuiz: () => setQuizSetupOpen(true), quizDisabled: !entries.length,
     onOpenSentence: () => { setSentenceItems([]); setSentenceGrade(null); setSentenceError(''); setView('sentence') },
     sentenceDisabled: !entries.length && !favorites.length,
@@ -1052,7 +1057,7 @@ export default function App() {
       {settingsOpen ? (
         <SettingsModal settings={settings} theme={theme} onThemeChange={setTheme}
           onClose={() => setSettingsOpen(false)}
-          onSave={(s) => { setSettings(s); saveSettings(s); setSettingsOpen(false); getStatus().then(setStatus).catch(() => {}) }} />
+          onSave={(s) => { setSettings(s); saveSettings(s); setSettingsOpen(false); retryStatus() }} />
       ) : null}
 
       {backupOpen ? (

@@ -27,9 +27,18 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { chromium, devices } = await requirePlaywright();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const PORT = Number(process.env.SIM_PORT || 8821);
-const MOCK = Number(process.env.SIM_MOCK || 9821);
-const DICT_MOCK = Number(process.env.SIM_DICT_MOCK || 9822);
+/**
+ * 端口：默认**每次跑随机取一段**，避免和别的项目/别的会话撞车。
+ *
+ * 踩过的坑：姊妹项目（回译本）的 e2e 也用 8821/9821，两个会话同时跑时
+ * 后起的那个直接 EADDRINUSE 崩掉，而且报错信息（"Emitted 'error' event on Server"）
+ * 完全看不出是"端口被别人占了"。
+ * 需要固定端口时用 SIM_PORT / SIM_MOCK / SIM_DICT_MOCK 覆盖。
+ */
+const PORT_BASE = Number(process.env.SIM_PORT_BASE || (26000 + Math.floor(Math.random() * 2000)));
+const PORT = Number(process.env.SIM_PORT || PORT_BASE);
+const MOCK = Number(process.env.SIM_MOCK || (PORT_BASE + 1));
+const DICT_MOCK = Number(process.env.SIM_DICT_MOCK || (PORT_BASE + 2));
 const BASE = `http://127.0.0.1:${PORT}/`;
 const SHOTS = path.join(ROOT, 'test', 'agent_out', 'sim');
 const argv = process.argv.slice(2);
@@ -1174,7 +1183,21 @@ async function runEdgeCases(browser) {
         await page.waitForTimeout(150);
       }
     }
-    check(P, '后端连不上时界面上明说「后端未连接」', /后端未连接/.test(chip), chip);
+    // ⚠️ 不能一失败就说"未连接"：冷启动要 30~60 秒，先给"正在连接"（用户实测反馈过这个误报）
+    check(P, '刚失败时不误报「未连接」，而是显示正在连接', !/未连接/.test(chip), chip);
+    await page.waitForTimeout(13000);
+    // 手机端顶栏的状态条只留圆点，完整文案在「更多」菜单里 —— 两处都读一遍
+    let chip2 = await page.evaluate(() => (document.querySelector('.status-chip')?.innerText || '').replace(/\s+/g, ' ').trim());
+    if (!chip2) {
+      const more2 = page.locator('.topbar-more .icon-btn');
+      if (await more2.isVisible()) {
+        await more2.click();
+        await page.waitForSelector('.more-menu', { timeout: 5000 });
+        chip2 = (await page.locator('.more-menu-info').innerText()).replace(/\s+/g, ' ').trim();
+        await page.keyboard.press('Escape');
+      }
+    }
+    check(P, '持续连不上（约 13 秒后）才明说「未连接 · 点这里重试」', /未连接/.test(chip2), chip2);
     const drawer = await page.locator('.sidebar').isHidden();
     if (drawer) { await page.locator('.side-toggle').click(); await page.waitForTimeout(300); }
     const bookVisible = (await page.locator('.lesson-item').count()) > 0;

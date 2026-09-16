@@ -1191,3 +1191,15 @@ body.drawer-open { overflow: hidden; }
 .mode-chip.active { background: var(--brand); color: #fff; }
 /* 手机上热区要够 44px：这是切换整轮模式的动作，点错代价高（实测审计会拦） */
 @media (pointer: coarse) { .mode-chip { min-height: 44px; padding: 4px 16px; } }
+
+/* 后端状态芯片：三态（探活中 / 已连接 / 真失败）+ 可点重试
+   免费实例冷启动要 30~60 秒，只有两态时会把它误报成"未连接"（用户实测反馈）。 */
+.status-chip { cursor: pointer; }
+.status-chip:hover { border-color: var(--brand); color: var(--brand); }
+.status-chip.warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+.dot.wait { background: #e0a30a; animation: dot-pulse 1.2s ease-in-out infinite; }
+.dot.bad { background: #e0a30a; }
+@keyframes dot-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dot.wait { animation: none; } }
+/* 它能点了，就得有够大的热区（可用性审计会拦 28×22 这种） */
+@media (pointer: coarse) { .status-chip { min-height: 44px; min-width: 44px; justify-content: center; padding: 6px 14px; } }

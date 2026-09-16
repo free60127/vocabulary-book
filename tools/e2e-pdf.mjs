@@ -14,7 +14,8 @@ import { spawn } from 'node:child_process';
 import { requirePlaywright } from './playwright.mjs';
 
 const { chromium } = await requirePlaywright();
-const PORT = 8817, MOCK = 9817;
+// 端口随机取一段（理由同 e2e-vocab：固定端口会与别的会话撞车）
+const PORT = Number(process.env.PDF_E2E_PORT || (22000 + Math.floor(Math.random() * 2000))), MOCK = PORT + 1;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const entry = (head, extra = {}) => ({
   head, kind: 'word', phonetic: '/ɪnˈʃraɪn/', pos: '动词', brief: '把……奉为神圣',
