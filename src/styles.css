@@ -504,6 +504,11 @@ body.drawer-open { overflow: hidden; }
 /* ---------- 搜索栏 ---------- */
 .search-bar { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin-bottom: 14px; color: var(--muted); }
 .search-input { flex: 1; min-width: 0; border: none; outline: none; font: inherit; font-size: 15px; color: var(--text); background: transparent; }
+/* 输入框 + 右侧一键清空的容器。
+   ⚠️ 必须写在下面那些 @media **之前**：媒体查询里给 wrapper 设了 flex-basis:100%（手机端独占一行），
+   同特异性下**后写的赢** —— 我第一版把这段追加到文件末尾，结果手机端输入框被挤成 68px 宽。 */
+.search-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.search-input-wrap .search-input { width: 100%; padding-right: 34px; }
 /* 触摸设备上把可点高度撑满整条搜索框：原来 input 只有 23px 高，
    而外面那条白底大框看着哪儿都能点 —— 手指落在上下留白里其实什么都不会发生
    （实测：点框内空白处不聚焦，只有正中间那行字能点中）。 */
@@ -513,7 +518,11 @@ body.drawer-open { overflow: hidden; }
 .search-input::placeholder { color: #98a4b0; }
 @media screen and (max-width: 900px) {
   .search-bar { flex-wrap: wrap; }
-  .search-input { flex-basis: 100%; order: -1; }
+  /* ⚠️ 这两条原来写给 .search-input：手机端让输入框独占第一行。
+     输入框套上 .search-input-wrap（为了放 × 按钮）之后，必须改指向 wrapper ——
+     否则输入框被挤到和"档位/查一下"同一行，只剩几十像素宽（真机实测）。 */
+  .search-input-wrap { flex-basis: 100%; order: -1; }
+  .search-input { flex-basis: auto; order: 0; }
 }
 
 /* ---------- 词条卡片 ---------- */
@@ -1274,8 +1283,6 @@ body, .editor, .sidebar, .modal, .sentence-input {
 /* ---------- 搜索框内的一键清空 ----------
    手机上想把 "tumult" 删掉得按六次退格（用户反馈）；这里放一个 ×，
    位置贴在输入框右内侧（图标不挤占输入宽度）。 */
-.search-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
-.search-input-wrap .search-input { width: 100%; padding-right: 34px; }
 .input-clear {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
   width: 26px; height: 26px; border-radius: 50%;

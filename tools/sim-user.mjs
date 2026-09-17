@@ -321,6 +321,38 @@ async function runProfile(browser, p) {
       check(p.id, '卡片上的表单控件够高', card.lowFieldCount === 0, short(card.lowField));
     }
 
+    at('搜索框尺寸');
+    /* 输入框套了一层容器（为了放 × 按钮）之后，手机端被挤成 68px 宽 ——
+       这类"改结构把响应式规则打断"的问题，只有量宽度才能发现。 */
+    {
+      await page.fill('.search-input', 'tumult');
+      await page.waitForTimeout(250);
+      const box = await page.evaluate(() => {
+        const input = document.querySelector('.search-input');
+        const clear = document.querySelector('.input-clear');
+        const r = input.getBoundingClientRect();
+        const cr = clear && clear.getBoundingClientRect();
+        return {
+          vw: window.innerWidth,
+          inputW: Math.round(r.width),
+          inputH: Math.round(r.height),
+          clearIn: Boolean(cr && cr.width > 0 && cr.right <= r.right + 1
+            && cr.left >= r.left - 1
+            && Math.abs((cr.top + cr.height / 2) - (r.top + r.height / 2)) <= 2),
+          clearSize: cr ? Math.round(cr.width) : 0,
+        };
+      });
+      check(p.id, '搜索框够宽（≥ 视口一半，手机端也是独占一行）',
+        box.inputW >= box.vw / 2, JSON.stringify(box));
+      check(p.id, '一键清空按钮在输入框内且可点',
+        box.clearIn && box.clearSize >= 24, JSON.stringify(box));
+      if (p.touch) {
+        check(p.id, '手机上输入框高度够（44px，手指能点中）', box.inputH >= 40, `${box.inputH}px`);
+      }
+      await page.locator('.input-clear').click();
+      await page.waitForTimeout(150);
+    }
+
     at('中文查词');
     /* ---------- 1a2. 中文输入 → 先给候选词，挑一个再讲解 ----------
        线上真实事故：查"羽毛球"时词头直接是中文，音标却是 /ˈbædmɪntən/，自相矛盾。 */
