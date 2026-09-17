@@ -1453,6 +1453,72 @@ async function runEdgeCases(browser) {
     await ctx.close();
   }
 
+  /* ②流式查词：边生成边看（用户要求的功能，必须真的"先看到内容"）
+       同时验证：流式中不能存/导出半成品；SSE 被拦时自动回退轮询，结果照样出来。 */
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 90)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+
+    const t0 = Date.now();
+    await page.fill('.search-input', '__slow__streaming');   // mock 的慢速标记：分段之间放慢，才观察得到
+    await page.keyboard.press('Enter');
+    // 第一块内容（进度条出现 = 卡片已经在长）
+    const sawBar = await page.waitForFunction(() => Boolean(document.querySelector('.stream-bar')), null, { timeout: 30000 })
+      .then(() => true).catch(() => false);
+    const firstPaint = Date.now() - t0;
+    if (!sawBar) {
+      // 失败时把现场说清楚（不要只抛一个超时 —— 那样排查要重跑一遍）
+      const st = await page.evaluate(() => ({
+        err: document.querySelector('.error-banner')?.innerText?.replace(/\s+/g, ' ').slice(0, 80) || '',
+        progress: document.querySelector('.search-pane')?.innerText?.replace(/\s+/g, ' ').slice(0, 60) || '',
+        card: Boolean(document.querySelector('.entry-card')),
+        chip: document.querySelector('.status-chip')?.innerText?.replace(/\s+/g, ' ').slice(0, 40) || '',
+      }));
+      check(P, '流式：进度条出现（未出现时给出诊断）', false, JSON.stringify(st));
+    }
+    const during = await page.evaluate(() => ({
+      bar: Boolean(document.querySelector('.stream-bar')),
+      saveDisabled: document.querySelector('.save-bar .primary-btn')?.disabled === true,
+      pdfDisabled: [...document.querySelectorAll('.save-bar button')].some((b) => /导出 PDF/.test(b.textContent) && b.disabled),
+      askHidden: !document.querySelector('.ask-section'),
+      text: (document.querySelector('.stream-bar')?.innerText || '').replace(/\s+/g, ' ').slice(0, 50),
+    }));
+    if (sawBar) check(P, '流式：生成中就显示进度条', during.bar, during.text);
+    check(P, '流式：生成中禁用「加入单词本」与「导出 PDF」（避免存下半成品）',
+      during.saveDisabled && during.pdfDisabled, JSON.stringify(during));
+    check(P, '流式：生成中不显示追问（半成品上追问没意义）', during.askHidden);
+    await page.screenshot({ path: path.join(SHOTS, 'stream-early.png') }).catch(() => {});
+
+    await page.waitForFunction(() => !document.querySelector('.stream-bar'), null, { timeout: 60000 });
+    const doneAt = Date.now() - t0;
+    const after = await page.evaluate(() => ({
+      sections: document.querySelectorAll('.entry-card .sheet-section').length,
+      saveDisabled: document.querySelector('.save-bar .primary-btn')?.disabled === true,
+      ask: Boolean(document.querySelector('.ask-section')),
+    }));
+    check(P, '流式：首块出现明显早于完成（< 完成时间的一半）',
+      firstPaint < doneAt / 2, `首块 ${firstPaint}ms / 完成 ${doneAt}ms`);
+    check(P, '流式：完成后写操作恢复、追问回来',
+      after.sections >= 6 && !after.saveDisabled && after.ask, JSON.stringify(after));
+
+    /* 回退：把 SSE 端点拦掉，应该自动回到轮询并照样出卡片 */
+    await page.route('**/api/lookup/*/stream', (route) => route.abort());
+    await page.fill('.search-input', '__slow__fallbackword');
+    await page.keyboard.press('Enter');
+    const cardOk = await page.waitForFunction(
+      () => /fallbackword/i.test(document.querySelector('.entry-card h1')?.textContent || ''),
+      null, { timeout: 60000 },
+    ).then(() => true).catch(() => false);
+    check(P, '流式不可用时自动回退轮询（照样出卡片）', cardOk);
+    await page.unroute('**/api/lookup/*/stream');
+    check(P, '流式场景无未捕获异常', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   /* ②侧栏滚动条：三块可滚区域各画一条灰条，比内容还抢眼（用户反馈截图） */
   {
     const ctx = await browser.newContext({ ...devices['Pixel 7'] });
@@ -1758,7 +1824,12 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     ALLOW_PRIVATE_BASE_URL: '1',
     DICT_PROVIDER: 'youdao-web',
     DICT_BASE_URL: mocks.dictBaseUrl,
-    DATA_DIR: path.join(ROOT, 'test', 'agent_out', 'sim-data'),
+    // 每轮用**全新**的数据目录：查词缓存/任务若跨轮次复用，
+    // 会让"流式"这类场景直接命中缓存而看不到过程（实测踩过：表现为看不到进度条）
+    DATA_DIR: path.join(ROOT, 'test', 'agent_out', 'sim-data-' + Date.now()),
+    // 测试自己会跑几十次查词：把限流放宽，否则后面的场景会被 429 掐掉
+    // （踩过：新增的流式场景因为前面积累的请求量而拿不到任务，表现为"看不到进度条"）
+    RATE_LIMIT_PER_MIN: '1000',
   },
   stdio: 'ignore',
 });

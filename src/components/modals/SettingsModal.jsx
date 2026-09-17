@@ -22,6 +22,16 @@ export default function SettingsModal({ settings, theme = 'system', onThemeChang
             {THEMES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
         </label>
+        <label className="stream-toggle">
+          <input type="checkbox" checked={form.streamLookup !== false}
+            onChange={(e) => setForm((f) => ({ ...f, streamLookup: e.target.checked }))} />
+          <span>流式输出（边生成边看）</span>
+        </label>
+        <p className="muted small">
+          打开后：音标/释义/近义词…会**一块一块长出来**，不用等整张卡片写完；
+          关掉则和以前一样，等全部生成完再显示。
+          <b>关掉是排查问题的保险绳</b>——若某次生成看起来不对劲，可以先关掉再试。
+        </p>
         <p className="muted small">留空就用服务端 .env 里的配置；填了就只存在本机浏览器。</p>
         <p className="muted small">前端版本：{typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev'}
           <span className="muted small">（页面上没有刚做的新功能时，先按 Ctrl+F5 / Cmd+Shift+R 强制刷新）</span></p>

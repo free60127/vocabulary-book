@@ -43,6 +43,7 @@ import SentencePane from './components/SentencePane.jsx'
 import { useSentencePractice } from './hooks/useSentencePractice.js'
 import { useReviewSession } from './hooks/useReviewSession.js'
 import { usePrintJob } from './hooks/usePrintJob.js'
+import { useLookupStream } from './hooks/useLookupStream.js'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 import ReviewSetup from './components/ReviewSetup.jsx'
 
@@ -142,6 +143,8 @@ export default function App() {
 
   /** 卸载后不要再 setState（轮询回调可能在卸载之后才回来） */
   const aliveRef = useRef(true)
+  /** 流式查词：边生成边看（不可用时自动回退到下面的轮询链路） */
+  const stream = useLookupStream({ aliveRef })
 
   /* 造句练习：抽词口径与复习一致（本子 + 收藏，斩掉的排除） */
   const sentencePool = useMemo(
@@ -374,6 +377,34 @@ export default function App() {
     if (hasCJK(q)) { await runZhLookup(q); return }
     setError(''); setBusy(true); setEntry(null); setProgress('正在提交…')
     try {
+      /**
+       * 流式优先：边生成边看。
+       * 失败或 6 秒没首段 → 回退到轮询（**同一个 jobId** 继续等，不重复提交、不重复计费）。
+       * 设置里可以关掉（settings.streamLookup === false）。
+       */
+      if (settings.streamLookup !== false) {
+        const sres = await stream.run({ term: q, level, settings })
+        if (sres.aborted) return
+        if (sres.error) throw sres.error
+        if (!sres.fallback) {
+          const se = sres.data && sres.data.entry
+          if (!se) throw new Error('模型没有返回词条，请重试')
+          setEntry(se); setView('search'); setProgress('')
+          markBackendUp()
+          requestAnimationFrame(() => toTop({ smooth: false }))
+          pushHistoryEntry(se)
+          attachFavoriteEntry(se)
+          if (saveToBookId) {
+            const { bookName } = saveEntry(saveToBookId, se)
+            flash('已加入「' + bookName + '」：' + se.head, TIP_LONG_MS)
+            setActiveBookId(saveToBookId)
+          }
+          markStudied()
+          if (sres.streamIncomplete) flash('这次讲解中途断了，可能有内容缺失 —— 可以再查一次补全', TIP_LONG_MS)
+          return
+        }
+        setProgress('正在讲解这个词…')
+      }
       const out = await submitAndPoll({
         submit: () => lookup({ term: q, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
         fetchJob: getLookupJob,
@@ -818,6 +849,10 @@ export default function App() {
             onExportPdf={(e) => print.start({ kind: 'entry', entry: e })}
             onToggleFavorite={toggleFavorite} isFavorite={isFavorite}
             onSave={saveToBook} onCreateBook={createAndSave} onLookupWord={runLookup}
+            entry={entry || stream.partial}
+            streaming={!entry && Boolean(stream.partial)}
+            streamProgress={stream.progress}
+            streamLabels={stream.labels}
             zhTerm={zhQuery} zhItems={zhCandidates}
             onPickZh={(c) => pickZhWord(c.word)}
             onDismissZh={() => { setZhCandidates([]); setZhQuery('') }}

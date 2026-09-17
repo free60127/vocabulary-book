@@ -78,6 +78,23 @@ export const DICT_SAMPLE = {
  * 起两个本地服务：AI（OpenAI 兼容）与词典。
  * @returns {Promise<{aiBaseUrl:string, dictBaseUrl:string, calls:object, close:()=>Promise<void>}>}
  */
+
+/** 把词条对象拆成"一行一段"的 NDJSON（与生产协议一致，供流式分支使用） */
+function entryToSegments(entry) {
+  const one = (o) => JSON.stringify(o);
+  const meta = { t: 'meta', head: entry.head, kind: entry.kind, phonetic: entry.phonetic, pos: entry.pos, brief: entry.brief, register: entry.register, tone: entry.tone, strength: entry.strength };
+  const segs = [one(meta)];
+  if (Array.isArray(entry.meanings) && entry.meanings.length) segs.push(one({ t: 'meanings', items: entry.meanings }));
+  if ((entry.scenes || []).length || entry.avoid) segs.push(one({ t: 'scenes', items: entry.scenes || [], avoid: entry.avoid || '' }));
+  if (entry.mnemonic) segs.push(one({ t: 'mnemonic', ...entry.mnemonic }));
+  if ((entry.synonyms || []).length) segs.push(one({ t: 'synonyms', items: entry.synonyms }));
+  if ((entry.collocations || []).length) segs.push(one({ t: 'collocations', items: entry.collocations }));
+  if ((entry.examples || []).length) segs.push(one({ t: 'examples', items: entry.examples }));
+  segs.push(one({ t: 'notes', confusions: entry.confusions || '', usageNotes: entry.usageNotes || '', examTips: entry.examTips || '' }));
+  segs.push(one({ t: 'done' }));
+  return segs;
+}
+
 export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) {
   const calls = { ai: 0, dict: 0, terms: [], bodies: [] };
 
@@ -87,13 +104,70 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
     q.on('end', async () => {
       calls.ai += 1;
       calls.bodies.push(b);
-      const term = (/【查询内容】([^\n\\]+)/.exec(b) || [])[1]?.trim() || 'object';
+      /**
+       * 从请求体里取"用户消息文本"再抽词头。
+       * ⚠️ 不能直接对 JSON 原文用正则：正文里的换行在 JSON 里是「反斜杠 + n」两个字符，
+       * 边界很容易被吃穿（实测把整个请求体当成了词头）。
+       * 先 JSON.parse 拿到真正的 messages，再在**解码后**的文本上抽。
+       */
+      /**
+       * 从请求体里取"用户消息文本"，再按**字符串切分**抽词头。
+       * 为什么不用正则：正文里的换行在 JSON 里是「反斜杠 + n」两个字符，
+       * 边界很容易被吃穿（实测把整个请求体当成了词头）；而且正则里的转义在本项目的
+       * 编辑链路上反复被踩坏。用 indexOf + split 最稳。
+       */
+      const bodyObj = (() => { try { return JSON.parse(b); } catch { return null; } })();
+      const userText = bodyObj && Array.isArray(bodyObj.messages)
+        ? bodyObj.messages.map((m) => String((m && m.content) || "")).join(String.fromCharCode(10))
+        : b;
+      const afterTag = (tag) => {
+        const at = userText.indexOf(tag);
+        if (at < 0) return "";
+        return userText.slice(at + tag.length).split(String.fromCharCode(10))[0].trim();
+      };
+      let term = afterTag("【查询内容】") || "object";
+      // __slow__ 标记：词头取标记之后的部分，但流式分段放慢 —— 让测试能观察到"边生成边看"
+      const slowStream = term.startsWith('__slow__');
+      if (slowStream) term = term.slice('__slow__'.length).trim() || 'object';
       calls.terms.push(term);
       const isQuiz = /自测题|出题/.test(b);
       const send = (code, payload) => {
         r.writeHead(code, { 'Content-Type': 'application/json' });
         r.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
       };
+      /* 标记词要在**流式分支之前**处理：否则 __error__ / __garbage__ 会被流式截胡，
+         "错误路径"这类用例就永远等不到错误提示（实测踩过） */
+      if (term === '__error__') return send(500, { error: { message: 'mock upstream exploded' } });
+      if (term === '__garbage__') return send(200, { choices: [{ message: { content: '这不是 JSON' } }] });
+
+      // 流式分支：按 NDJSON 分段吐（真实链路也是这个协议）
+      const wantsStream = /"stream"\s*:\s*true/.test(b);
+      if (wantsStream && !/【学生的问题】/.test(b) && !isQuiz && /【查询内容】/.test(b)) {
+        const entry = term === '__huge__' ? hugeEntry(term) : entryFor(term);
+        const segs = entryToSegments(entry);
+        r.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
+        const sse = (delta) => r.write('data: ' + JSON.stringify({ choices: [{ delta: { content: delta } }] }) + String.fromCharCode(10) + String.fromCharCode(10));
+        // 异常注入：__streamgarbage__ 夹杂说明与围栏；__streamcut__ 中途断流；__streamplain__ 直接一次性 JSON
+        const garbage = term === '__streamgarbage__';
+        const cut = term === '__streamcut__';
+        const plain = term === '__streamplain__';
+        if (garbage) sse('好的，下面开始输出：' + String.fromCharCode(10) + '```json' + String.fromCharCode(10));
+        if (plain) {
+          sse(JSON.stringify(entry));
+        } else {
+          for (let i = 0; i < segs.length; i += 1) {
+            if (cut && i >= 2) break;                    // 中途断流
+            sse(segs[i] + String.fromCharCode(10));
+            const per = slowStream ? 350 : (delayMs ? Math.max(60, Math.round(delayMs / segs.length)) : 0);
+            if (per) await new Promise((res) => setTimeout(res, per));
+          }
+        }
+        if (garbage) sse('```' + String.fromCharCode(10));
+        if (!cut) sse('[DONE-mark]');
+        r.write('data: [DONE]' + String.fromCharCode(10) + String.fromCharCode(10));
+        return r.end();
+      }
+
       if (delayMs) await new Promise((res) => setTimeout(res, delayMs));
       // 追问：返回**纯文本**回答（真实链路里也是纯文本，不是 JSON）
       if (/【学生的问题】/.test(b)) {

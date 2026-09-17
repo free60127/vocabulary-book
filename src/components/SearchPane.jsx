@@ -14,7 +14,7 @@ import ZhCandidates from './ZhCandidates.jsx';
 export default function SearchPane({
   query, setQuery, onLookup, level, setLevel, levels,
   busy, progress, error, onDismissError,
-  entry, existing, books, onExportPdf, onToggleFavorite, isFavorite,
+  entry, streaming, streamProgress, streamLabels, existing, books, onExportPdf, onToggleFavorite, isFavorite,
   onSave, onCreateBook, onLookupWord, searchRef,
   onAsk, askBusy, askError, followups, onClearFollowups,
   zhTerm, zhItems, onPickZh, onDismissZh,
@@ -81,6 +81,7 @@ export default function SearchPane({
           只按 id 找的话卡片会重新显示"加入单词本"，点下去本子里就多一条一样的 */}
       {entry ? (
         <EntryCard entry={entry} books={books} existing={existing}
+          streaming={streaming} streamProgress={streamProgress} streamLabels={streamLabels}
           onExportPdf={onExportPdf}
           onToggleFavorite={onToggleFavorite} isFavorite={isFavorite}
           onSave={onSave} onCreateBook={onCreateBook} onLookupWord={onLookupWord}

@@ -141,8 +141,13 @@ export function createLlm({ allowServerKey = true } = {}) {
     try { return JSON.parse(body); } catch { /* 继续 */ }
     const start = body.indexOf('{');
     const end = body.lastIndexOf('}');
-    if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
-    throw new Error('模型返回不是有效 JSON，请重试或换模型');
+    if (start >= 0 && end > start) {
+      // ⚠️ 这次 parse 以前**没有 try/catch**，于是"多行 JSON"（比如流式的 NDJSON）会直接抛
+      // "Unexpected non-whitespace character after JSON"，把一个可恢复的情况变成任务失败。
+      // 现在统一返回 null，由调用方决定怎么提示。
+      try { return JSON.parse(body.slice(start, end + 1)); } catch { return null; }
+    }
+    return null;
   }
   /**
    * 调一次模型。
@@ -179,12 +184,96 @@ export function createLlm({ allowServerKey = true } = {}) {
   }
 
 
+  /**
+   * 流式调用：边收边把增量交给调用方（查词的分段渲染靠它）。
+   *
+   * 三个要点：
+   *  · **不能用 `response_format: json_object`** —— 那是"一次性输出一个 JSON"的约束，
+   *    与"一行一段"冲突；格式约束交给提示词，解析端有兜底（见 server/stream.mjs）。
+   *  · 返回**累积全文**，与 callLLM 同形 —— 万一分段解析全失败，还能当整段 JSON 兜底解析。
+   *  · 沿用 postChat 的安全约定：不跟随重定向、超时、错误文案一致。
+   * @param {(text:string)=>void} onDelta 每收到一段增量文本就回调（同步，别在里面 await 太久）
+   */
+  async function callLLMStream({ baseUrl, model, apiKey, system, user, maxTokens, meta },
+                               { onDelta, timeoutMs = 300000 } = {}) {
+    const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let r;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers,
+        redirect: 'manual',            // 同 postChat：跟随重定向等于把目标换成响应头指定的任意地址
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          temperature: 0.4,
+          max_tokens: Number(maxTokens || process.env.AI_MAX_TOKENS || 8000),
+          stream: true,
+        }),
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      if (e && e.name === 'AbortError') throw new Error('模型接口请求超时，请稍后重试');
+      throw new Error('无法连接模型接口: ' + e.message);
+    }
+    if (r.status >= 300 && r.status < 400) {
+      clearTimeout(timer);
+      const loc = r.headers.get('location') || '(响应里没有 Location)';
+      throw new Error('模型接口返回了重定向（' + r.status + ' → ' + loc + '）。出于安全考虑不自动跟随，请把 Base URL 直接写成最终地址。');
+    }
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      clearTimeout(timer);
+      throw new Error('模型接口错误 ' + r.status + ': ' + text.slice(0, 500));
+    }
+    if (!r.body) {
+      clearTimeout(timer);
+      throw new Error('模型接口没有返回流式响应体');
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    let full = '';
+    let finishReason = '';
+    try {
+      for await (const chunk of r.body) {
+        buf += decoder.decode(chunk, { stream: true });
+        let idx = buf.indexOf(String.fromCharCode(10));
+        while (idx >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          idx = buf.indexOf(String.fromCharCode(10));
+          if (!line || !line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let obj;
+          try { obj = JSON.parse(payload); } catch { continue; }   // 半截行：跳过，下一块会补全
+          const choice = (obj.choices && obj.choices[0]) || {};
+          if (choice.finish_reason) finishReason = String(choice.finish_reason);
+          const delta = (choice.delta && choice.delta.content) || '';
+          if (delta) { full += delta; if (onDelta) onDelta(delta); }
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    if (meta) { meta.finishReason = finishReason; meta.length = full.length; meta.streamed = true; }
+    if (!full.trim()) throw new Error('模型没有返回内容，请重试');
+    return full;
+  }
+
+
   return {
     // stat：模型/地址的取值口（路由里到处在用，保持原样暴露）
     stat,
     model: stat.model, baseUrl: stat.baseUrl, hasKey: stat.hasKey, envKey,
     normalizeApiKey, warnDirty, isSafeBaseUrl, resolveEndpoint,
-    postChat, parseJsonLoose, callLLM,
+    postChat, parseJsonLoose, callLLM, callLLMStream,
     hasEnvKey: () => Boolean(envKey()), allowServerKey,
   };
 }

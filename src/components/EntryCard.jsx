@@ -75,6 +75,7 @@ function DictSection({ dict }) {
  * 学习者是先想知道"这词什么意思、能不能用"，再关心"和近义词差在哪"。
  */
 export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen',
+  streaming = false, streamProgress = '', streamLabels = [],
   onToggleFavorite, isFavorite, onLookupWord, onAsk, askBusy, askError, followups, onClearFollowups }) {
   const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
   const [askText, setAskText] = useState('');
@@ -239,7 +240,7 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
           看完卡片常见的是"再问一句"：这两个词到底差在哪、能不能造个句子、考试会怎么考。
           以前只能重新查一次（还会生成一整张新卡），或者干脆算了。
           这里复用异步任务 + 轮询那条链路（弱网与手机端已经验证过），答案是纯文本。 */}
-      {forPrint || !onAsk ? null : (
+      {forPrint || !onAsk || streaming ? null : (
         <section className="sheet-section ask-section">
           <div className="section-heading">
             <span className="label-dot" />
@@ -285,21 +286,32 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
         </section>
       )}
 
+      {/* 流式进度：边生成边告诉用户已经到哪一块了（不然"卡片在长大"会显得莫名其妙） */}
+      {streaming && !forPrint ? (
+        <div className="stream-bar" role="status" aria-live="polite">
+          <span className="stream-dot" aria-hidden="true" />
+          <span className="stream-text">{streamProgress || '正在生成…'}</span>
+          {streamLabels.length ? <span className="stream-done">已完成：{streamLabels.join(' · ')}</span> : null}
+        </div>
+      ) : null}
+
       {forPrint ? null : (
       <div className="save-bar">
         {saved ? <span className="saved-flag"><Star size={14} fill="currentColor" />已在「{existing.name}」里</span> : null}
         {onExportPdf ? (
-          <button className="ghost-btn" onClick={() => onExportPdf(entry)} title="导出这一个词条的 PDF（在打印对话框里选「另存为 PDF」）">
+          <button className="ghost-btn" onClick={() => onExportPdf(entry)} disabled={streaming}
+            title={streaming ? '等讲解生成完再导出（否则导出的是一半内容）' : '导出这一个词条的 PDF（在打印对话框里选「另存为 PDF」）'}>
             <FileDown size={15} />导出 PDF
           </button>
         ) : null}
         {books.length ? (
-          <select className="ocr-mode" value={bookId} onChange={(e) => setBookId(e.target.value)} title="选一个单词本">
+          <select className="ocr-mode" value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={streaming} title="选一个单词本">
             {books.map((b) => <option key={b.id} value={b.id}>{b.name}（{b.entries.length}）</option>)}
           </select>
         ) : null}
-        <button className="primary-btn" onClick={() => (books.length ? onSave(bookId) : onCreateBook())}>
-          <Plus size={16} />{books.length ? (saved ? '更新到单词本' : '加入单词本') : '新建单词本并加入'}
+        <button className="primary-btn" onClick={() => (books.length ? onSave(bookId) : onCreateBook())} disabled={streaming}
+          title={streaming ? '等讲解生成完再存（现在存下来的会缺内容）' : ''}>
+          <Plus size={16} />{streaming ? '生成中…' : (books.length ? (saved ? '更新到单词本' : '加入单词本') : '新建单词本并加入')}
         </button>
       </div>
       )}

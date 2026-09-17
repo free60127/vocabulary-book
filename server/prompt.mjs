@@ -119,6 +119,42 @@ export const DEFAULT_LEVEL = '四六级';
 export function normalizeLevel(level) {
   return LEVEL_KEYS.includes(level) ? level : DEFAULT_LEVEL;
 }
+/* ---------- 流式输出：只改"输出格式"，不改"讲什么" ---------- */
+
+/**
+ * 流式输出的格式说明。
+ *
+ * 设计原则：**讲解质量与一次性输出完全一致**，唯一区别是"分几次给我看"。
+ * 所以这里不是另写一个提示词，而是在原提示词后面追加"输出格式覆盖"——
+ * 字段定义、讲解要求、禁止事项全部沿用上面那份，避免两份提示词日后各自漂移。
+ */
+export const LOOKUP_STREAM_FORMAT_RULES = `
+
+⚠️ 本次是**流式输出**：不要输出成一个大 JSON，而是按下面的顺序、**每段单独一行 JSON**（NDJSON）。
+字段定义、讲解要求、禁止事项全部同上，一个字都不变，只是分成几段发。
+
+段的顺序（必须按这个顺序，一段一行，段之间直接换行，不要空行、不要代码块围栏、不要任何解释文字）：
+{"t":"meta","head":"…","kind":"…","phonetic":"…","pos":"…","brief":"…","register":"…","tone":"…","strength":"…"}
+{"t":"meanings","items":[{"pos":"…","cn":"…","en":"…","note":"…"}]}
+{"t":"scenes","items":["…","…"],"avoid":"…"}
+{"t":"mnemonic","image":"…","hook":"…","parts":"…","family":"…"}
+{"t":"synonyms","items":[{"word":"…","phonetic":"…","cn":"…","register":"…","tone":"…","strength":"…","diff":"…","usage":"…","example":"…","exampleCn":"…"}]}
+{"t":"collocations","items":["…","…"]}
+{"t":"examples","items":[{"en":"…","cn":"…","note":"…"}]}
+{"t":"notes","confusions":"…","usageNotes":"…","examTips":"…"}
+{"t":"done"}
+
+硬性要求：
+1. 每段必须是**合法的单行 JSON**（一行之内写完，不要换行美化）；
+2. 顺序固定，不要回头补前面的段；
+3. 可选字段没有内容就给空字符串或空数组，不要省略键、不要写 null；
+4. 最后一行必须是 {"t":"done"}。`;
+
+/** 查词的系统提示词：一次性 or 流式（只差最后那段格式说明） */
+export function buildLookupSystemPrompt({ stream = false } = {}) {
+  return stream ? LOOKUP_SYSTEM_PROMPT + LOOKUP_STREAM_FORMAT_RULES : LOOKUP_SYSTEM_PROMPT;
+}
+
 /* ---------- 中文查词：先给候选词（用户挑一个再讲解） ---------- */
 /**
  * 中文输入不能直接当成"要讲的词"。
@@ -371,4 +407,4 @@ export function buildSentenceGradeMessage({ head, brief = '', pos = '', mode = '
         + '改表达可以，删信息不行。'
       : '')
     + '\n\n请按要求输出批改 JSON。';
-}
+}

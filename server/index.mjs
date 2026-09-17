@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { buildLookupSystemPrompt, normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
 import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
@@ -27,6 +27,7 @@ import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, empt
 import { createBudget, budgetMessage } from './budget.mjs';
 import { createJobStore, createJobSlots } from './jobs.mjs';
 import { createLlm } from './llm.mjs';
+import { createSegmentReader, finalizeStreamEntry, SEGMENT_LABEL } from './stream.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -60,7 +61,7 @@ const syncDurable = syncStore.kind !== 'file';
  * 这里只持有它的实例，路由与任务照常调用。 */
 const ALLOW_SERVER_KEY = process.env.ALLOW_SERVER_KEY !== '0';
 const llm = createLlm({ allowServerKey: ALLOW_SERVER_KEY });
-const { resolveEndpoint, parseJsonLoose, callLLM, envKey } = llm;
+const { resolveEndpoint, parseJsonLoose, callLLM, callLLMStream, envKey } = llm;
 /** 模型/地址的取值口：路由里到处在用（原来是同文件的 stat，现在转发给 llm 模块） */
 const stat = llm.stat;
 
@@ -129,7 +130,7 @@ const store = createJobStore({
   max: Number(process.env.JOB_MAX_COUNT || 2000),
   slots: jobSlots,
 });
-const { saveJob, findJob, safeRun } = store;   // 其余（僵尸判定/淘汰/失败落盘）都在 store 内部用
+const { saveJob, findJob, guardStale, safeRun } = store;   // 淘汰/失败落盘仍只在 store 内部用
 
 /* ---------- 调用模型 ---------- */
 /* ---------- 查词任务（本产品的核心） ---------- */
@@ -190,6 +191,21 @@ async function runZhJob(jobId, { term, level, baseUrl, model, apiKey }) {
  * 键里带上 level（不同档位的讲解深度不同）与 model（换模型后结果会变）。
  * 命中就秒回，前端那条"提交 → 轮询"的链路一个字都不用改。
  */
+/** 流式连接的兜底时长（前端也会自己收尾；这里防"连接挂着但任务早没了"） */
+const TIMEOUT_STREAM_MS = Number(process.env.STREAM_TIMEOUT_MS || 6 * 60 * 1000);
+
+/** 对外的任务视图（不含 segments —— 那些已经按段推过了） */
+function publicJob(job) {
+  return {
+    jobId: job.jobId,
+    status: job.status,
+    data: job.data || null,
+    error: job.error || null,
+    streamMode: job.streamMode || '',
+    streamIncomplete: Boolean(job.streamIncomplete),
+  };
+}
+
 const LOOKUP_CACHE_TTL_SEC = Number(process.env.LOOKUP_CACHE_TTL_SEC || 24 * 3600);
 const lookupCacheKey = (term, level, kindHint, model) => KV_PREFIX + 'lcache:'
   + [String(term).toLowerCase(), level, kindHint || '', model || ''].join('|');
@@ -209,9 +225,10 @@ async function writeLookupCache(term, level, kindHint, model, data) {
   try { await kv.set(lookupCacheKey(term, level, kindHint, model), JSON.stringify(data), LOOKUP_CACHE_TTL_SEC); } catch { /* 缓存写失败不影响出结果 */ }
 }
 
-async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey }) {
+async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey, stream }) {
   const job = await findJob(jobId);
   if (!job) return;
+
   // 缓存命中 → 秒回（同一词同一档位 24 小时内重复查不再花时间和费用）
   const cached = await readLookupCache(term, level, kindHint, model);
   if (cached) {
@@ -222,39 +239,78 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
     saveJob(job);
     return;
   }
+
   job.status = 'running';
   job.updatedAt = Date.now();
+  job.segments = job.segments || [];
   saveJob(job);
-  // 先取词典事实：它是**客观事实的来源**（音标/词性/考试大纲标注），
-  // 也是这次讲解"接地"的依据。取不到就静默降级为纯 AI —— 词典是加分项，不该拖垮查词。
+
   // 词典核对限时：它只提供音标/词性/大纲标注这类"加分事实"，接口抖一下不该拖住整张卡片。
-  // 超时就按纯 AI 出结果（词典模块自己也有缓存，命中时是毫秒级）。
   const DICT_TIMEOUT_MS = Number(process.env.DICT_TIMEOUT_MS || 2500);
   const dictResult = await Promise.race([
     lookupDict(term, { provider: DICT_PROVIDER, env: process.env }),
     new Promise((resolve) => setTimeout(() => resolve({ ok: false, reason: 'timeout' }), DICT_TIMEOUT_MS)),
   ]);
-  const raw = await callLLM({
-    baseUrl, model, apiKey,
-    system: LOOKUP_SYSTEM_PROMPT,
-    user: buildLookupMessage({ term, kindHint, level, context, facts: dictResult.ok ? dictResult.facts : null }),
-    maxTokens: 8000,
-  });
-  const parsed = parseJsonLoose(raw);
-  // 词条必须有**稳定 id**：客户端靠它合并/去重/记删除墓碑，云同步也认它。
-  // 模型不会给（也不该让它给），所以服务端补一个。
-  const entry = sanitizeEntry({
-    ...parsed,
-    id: parsed.id || 'wb-' + randomBytes(8).toString('hex'),
-    head: parsed.head || term,
-    level,
-    createdAt: Date.now(),
-  });
-  if (!entry) throw new Error('模型返回的词条不完整（缺少释义），请重试');
-  job.data = { entry: applyDict(entry, dictResult) };
-  writeLookupCache(term, level, kindHint, model, job.data);
+  const facts = dictResult.ok ? dictResult.facts : null;
+
+  // 词典事实先成一段：它在卡片里排第二位，而且**此刻就已经拿到了** ——
+  // 用户能最先看到"已用有道词典核对"，不用等模型。
+  if (facts) {
+    job.segments.push({ t: 'dict', facts });
+    job.updatedAt = Date.now();
+  }
+
+  const system = buildLookupSystemPrompt({ stream: Boolean(stream) });
+  const user = buildLookupMessage({ term, kindHint, level, context, facts });
+  let raw = '';
+  if (stream) {
+    // 流式：边收边按行切段（见 server/stream.mjs 的三条硬规则）
+    const reader = createSegmentReader();
+    raw = await callLLMStream(
+      { baseUrl, model, apiKey, system, user, maxTokens: 8000 },
+      {
+        onDelta: (delta) => {
+          for (const seg of reader.feed(delta)) job.segments.push(seg);
+          // 只更新内存里的时间戳（每次写 KV 会把 KV 打爆）；KV 在完成时写一次
+          job.updatedAt = Date.now();
+        },
+      },
+    );
+    for (const seg of reader.flush()) job.segments.push(seg);
+    job.streamStats = reader.stats;
+  } else {
+    raw = await callLLM({ baseUrl, model, apiKey, system, user, maxTokens: 8000 });
+  }
+
+  const parsedIn = parseJsonLoose(raw);
+  const final = stream
+    ? finalizeStreamEntry({
+      segments: job.segments,
+      rawText: raw,
+      parseLoose: parseJsonLoose,
+      base: {
+        id: (parsedIn && parsedIn.id) || 'wb-' + randomBytes(8).toString('hex'),
+        head: (parsedIn && parsedIn.head) || term,
+        level,
+        createdAt: Date.now(),
+      },
+    })
+    : { entry: (parsedIn ? sanitizeEntry({
+      ...parsedIn,
+      id: (parsedIn && parsedIn.id) || 'wb-' + randomBytes(8).toString('hex'),
+      head: (parsedIn && parsedIn.head) || term,
+      level,
+      createdAt: Date.now(),
+    }) : null), mode: 'oneshot' };
+
+  if (!final.entry) throw new Error('模型返回的词条不完整（缺少释义），请重试');
+  job.data = { entry: applyDict(final.entry, dictResult) };
+  job.streamMode = final.mode;          // segments（正常）/ fallback（模型没按分段来）/ oneshot（关流式）
+  // 没收到 {"t":"done"} 说明模型中途断了：卡片能用但可能少几块，前端据此提示"可重试补全"
+  job.streamIncomplete = Boolean(stream) && !(job.segments || []).some((x) => x && x.t === 'done');
   job.status = 'done';
   job.updatedAt = Date.now();
+  writeLookupCache(term, level, kindHint, model, job.data);
   saveJob(job);
 }
 
@@ -603,6 +659,8 @@ const server = http.createServer(async (req, res) => {
         baseUrl: ep.baseUrl,
         model: String(body.model || '').trim() || stat.model(),
         apiKey: ep.apiKey,
+        // 流式：默认开（设置里可关；关了就回到"一次性 JSON"的老路）
+        stream: body.stream !== false,
       }));
       return json(res, 200, { ok: true, jobId, status: 'pending' });
     }
@@ -721,6 +779,63 @@ const server = http.createServer(async (req, res) => {
         baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
       }));
       return json(res, 200, { ok: true, jobId, status: 'pending' });
+    }
+
+    /* ---------- 流式：GET /api/lookup/:id/stream（SSE） ----------
+     * 只推**新增**的段（?from=N / Last-Event-ID），断线重连不重放；
+     * 15 秒一次注释心跳，防代理把长连接掐掉；
+     * 结束时 event: done 带上**最终完整词条** —— 前端据此覆盖 partial，
+     * 保证"看到的"和"存下来的"是同一个东西。 */
+    const streamMatch = p.match(/^\/api\/lookup\/([A-Za-z0-9-]{8,64})\/stream$/);
+    if (streamMatch && req.method === 'GET') {
+      const jobId = streamMatch[1];
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',        // 让 nginx/代理不要缓冲
+      });
+      const send = (event, data) => {
+        res.write('event: ' + event + String.fromCharCode(10));
+        res.write('data: ' + JSON.stringify(data) + String.fromCharCode(10) + String.fromCharCode(10));
+      };
+      res.write(': connected' + String.fromCharCode(10) + String.fromCharCode(10));
+
+      const url0 = new URL(req.url, 'http://x');
+      let cursor = Math.max(0, Number(url0.searchParams.get('from') || req.headers['last-event-id'] || 0) || 0);
+      let closed = false;
+      req.on('close', () => { closed = true; });
+      const heartbeat = setInterval(() => { if (!closed) res.write(': ping' + String.fromCharCode(10) + String.fromCharCode(10)); }, 15000);
+
+      try {
+        // 已经完成的任务（切走又回来）：一次性推完再结束
+        const first = await findJob(jobId);
+        if (!first) { send('error', { error: '任务不存在或已过期，请重新查询' }); return res.end(); }
+        if (first.status === 'done' && Array.isArray(first.segments) && first.segments.length) {
+          for (let i = cursor; i < first.segments.length; i += 1) send('segment', { index: i, seg: first.segments[i], label: SEGMENT_LABEL[first.segments[i].t] || '' });
+          send('done', { job: publicJob(first) });
+          return res.end();
+        }
+        const deadline = Date.now() + Number(TIMEOUT_STREAM_MS || 6 * 60 * 1000);
+        while (!closed && Date.now() < deadline) {
+          const job = guardStale(await findJob(jobId)) || null;
+          if (!job) { send('error', { error: '任务不存在或已过期，请重新查询' }); break; }
+          const segs = Array.isArray(job.segments) ? job.segments : [];
+          for (let i = cursor; i < segs.length; i += 1) {
+            send('segment', { index: i, seg: segs[i], label: SEGMENT_LABEL[segs[i].t] || '' });
+          }
+          cursor = Math.max(cursor, segs.length);
+          if (job.status === 'done') { send('done', { job: publicJob(job) }); break; }
+          if (job.status === 'error') { send('error', { error: job.error || '生成失败，请重试' }); break; }
+          await new Promise((r) => setTimeout(r, 400));   // 段级轮询：比任务轮询快得多，只读内存
+        }
+      } catch (e) {
+        if (!closed) send('error', { error: String((e && e.message) || e) });
+      } finally {
+        clearInterval(heartbeat);
+        if (!closed) res.end();
+      }
+      return undefined;
     }
 
     const jobMatch = p.match(/^\/api\/(lookup|quiz|followup|sentence)\/([A-Za-z0-9-]{8,64})$/);
