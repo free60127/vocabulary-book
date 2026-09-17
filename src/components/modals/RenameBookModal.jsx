@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { GitMerge, X } from 'lucide-react';
 import { useEscape } from '../../hooks/useEscape.js';
+import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 
 /**
  * 给单词本改名。
@@ -10,12 +11,13 @@ import { useEscape } from '../../hooks/useEscape.js';
  * （下面那行会实时显示"本子里有 N 个词条"）。
  */
 export function RenameBookModal({ book, onClose, onSubmit }) {
+  const trapRef = useFocusTrap();
   const [name, setName] = useState(book.name);
   useEscape(onClose);
   const clean = name.trim();
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal rename-modal" role="dialog" aria-modal="true" aria-label="重命名单词本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal rename-modal" role="dialog" aria-modal="true" aria-label="重命名单词本" ref={trapRef} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>重命名</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <label>单词本名字
           <input value={name} autoFocus maxLength={80}
@@ -39,13 +41,14 @@ export function RenameBookModal({ book, onClose, onSubmit }) {
  * 被并掉的那个本子会留墓碑，否则下一次云同步又会被云端旧副本带回来。
  */
 export function MergeBookModal({ from, books, onClose, onSubmit }) {
+  const trapRef = useFocusTrap();
   const targets = books.filter((b) => b.id !== from.id);
   const [toId, setToId] = useState(targets[0] ? targets[0].id : '');
   useEscape(onClose);
   const to = targets.find((b) => b.id === toId);
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal merge-modal" role="dialog" aria-modal="true" aria-label="合并单词本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal merge-modal" role="dialog" aria-modal="true" ref={trapRef} aria-label="合并单词本" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>合并单词本</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <p className="muted small">
           把「<b>{from.name}</b>」里的 {from.entries.length} 个词条移进另一个本子，然后删掉它。
@@ -79,12 +82,13 @@ export function MergeBookModal({ from, books, onClose, onSubmit }) {
  * 现在有正经界面：输入框默认带一个名字，回车即建，取消有明确反馈。
  */
 export function NewBookModal({ defaultValue = '我的单词本', onSubmit, onClose, hint }) {
+  const trapRef = useFocusTrap();
   const [name, setName] = useState(defaultValue);
   useEscape(onClose);
   const clean = name.trim();
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal rename-modal" role="dialog" aria-modal="true" aria-label="新建单词本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal rename-modal" role="dialog" aria-modal="true" aria-label="新建单词本" ref={trapRef} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head"><h2>新建单词本</h2><button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <label>单词本名字
           <input value={name} autoFocus maxLength={80}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Flame, LoaderCircle, Search, Sparkles, X } from 'lucide-react';
 import EntryCard from './EntryCard.jsx';
+import ZhCandidates from './ZhCandidates.jsx';
 
 /**
  * 查词视图：搜索栏 → 引导 → 词条卡片。
@@ -16,6 +17,7 @@ export default function SearchPane({
   entry, existing, books, onExportPdf, onToggleFavorite, isFavorite,
   onSave, onCreateBook, onLookupWord, searchRef,
   onAsk, askBusy, askError, followups, onClearFollowups,
+  zhTerm, zhItems, onPickZh, onDismissZh,
 }) {
   return (
     <section className="editor">
@@ -42,7 +44,13 @@ export default function SearchPane({
       ) : null}
       {progress ? <div className="muted small" role="status">{progress}</div> : null}
 
-      {!entry && !busy && !error ? (
+      {/* 中文查词：候选词**就地**列在搜索栏下面 —— 不跳到另一个视图，
+          这样输入框还在，改个词重搜不用先返回（原来的做法要按「回到查词」才能改） */}
+      {zhItems && zhItems.length ? (
+        <ZhCandidates term={zhTerm} items={zhItems} onPick={onPickZh} onDismiss={onDismissZh} />
+      ) : null}
+
+      {!entry && !busy && !error && !(zhItems && zhItems.length) ? (
         <div className="start-guide" role="note">
           <div className="start-guide-main">
             <span className="start-guide-title">查一个词，得到什么</span>

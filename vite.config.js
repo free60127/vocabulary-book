@@ -65,6 +65,7 @@ export default defineConfig({
    */
   test: {
     environment: 'jsdom',
+    setupFiles: ['test/ui/setup.js'],
     include: ['test/ui/**/*.test.jsx', 'test/ui/**/*.test.js'],
     globals: true,
     restoreMocks: true,

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob, sentencePractice, getSentenceJob } from './api.js'
+import { lookup, getLookupJob, quiz as quizApi, getQuizJob, followup, getFollowupJob } from './api.js'
 import {
-  POLL_LOOKUP_MS, POLL_QUIZ_MS, POLL_FOLLOWUP_MS, POLL_SENTENCE_MS, TIMEOUT_LOOKUP_MS,
-  TIMEOUT_QUIZ_MS, TIMEOUT_FOLLOWUP_MS, TIMEOUT_SENTENCE_MS, POLL_MAX_FAILURES,
+  POLL_LOOKUP_MS, POLL_QUIZ_MS, POLL_FOLLOWUP_MS, TIMEOUT_LOOKUP_MS, TIMEOUT_QUIZ_MS,
+  TIMEOUT_FOLLOWUP_MS, POLL_MAX_FAILURES,
   TIP_LONG_MS, TIP_NORMAL_MS,
 } from './constants.js'
 import { submitAndPoll } from './hooks/pollJob.js'
@@ -11,9 +11,8 @@ import { useBooks } from './hooks/useBooks.js'
 import { useCloud } from './hooks/useCloud.js'
 import { useAuth } from './hooks/useAuth.js'
 import {
-  SENTENCE_PREF_KEY, SIDE_STATE_KEY, ZH_PICK_KEY, loadFollowups, loadSettings, loadSpell, loadTheme, safeGet,
-  safeSet,
-  saveFollowups, saveSettings, saveSpell, saveTheme,
+  SIDE_STATE_KEY, ZH_PICK_KEY, loadFollowups, loadSettings, loadTheme, safeGet, safeSet,
+  saveFollowups, saveSettings, saveTheme,
 } from './storage.js'
 import { applyTheme } from './theme.js'
 import { toTop } from './scroll.js'
@@ -41,8 +40,9 @@ import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
 import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
+import { useSentencePractice } from './hooks/useSentencePractice.js'
+import { useReviewSession } from './hooks/useReviewSession.js'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
-import ZhPicker from './components/ZhPicker.jsx'
 import ReviewSetup from './components/ReviewSetup.jsx'
 
 const LEVELS = ['小初', '高考英语', '四六级', '考研/专四', '专八']
@@ -110,9 +110,6 @@ export default function App() {
   const [quiz, setQuiz] = useState(null)
   const [quizShow, setQuizShow] = useState(false)
   const [quizBusy, setQuizBusy] = useState(false)
-  const [reviewQueue, setReviewQueue] = useState(null)
-  const [reviewIndex, setReviewIndex] = useState(0)
-  const [revealed, setRevealed] = useState(false)
   const [favOpen, setFavOpen] = useState(false)
   const [bookQuery, setBookQuery] = useState('')
   const [kindFilter, setKindFilter] = useState('all')
@@ -133,43 +130,29 @@ export default function App() {
   const [followups, setFollowups] = useState(loadFollowups)
   const [askBusy, setAskBusy] = useState(false)
   const [askError, setAskError] = useState('')
-  /* 复习模式：review（看词回想评分）/ spell（看中文释义拼出单词）。记在本机，下次默认还是它。 */
-  const [reviewMode, setReviewMode] = useState(() => (loadSpell() ? 'spell' : 'review'))
-  /** 选好模式之前的"待开始队列"（due 或今日加练），确认模式后才成为 reviewQueue */
-  const [pendingQueue, setPendingQueue] = useState(null)
-  /* 练习轮（拼写 / 错词 / 今日加练）：只练不写排期 */
-  const [practice, setPractice] = useState(false)
-  const [reviewKind, setReviewKind] = useState('due')
-  /* ---------- 造句练习 ---------- */
-  const [sentenceMode, setSentenceMode] = useState('free')   // free | translate
-  const [sentenceItems, setSentenceItems] = useState([])
-  const [sentenceIndex, setSentenceIndex] = useState(0)
-  const [sentenceGrade, setSentenceGrade] = useState(null)
-  const [sentenceBusy, setSentenceBusy] = useState(false)
-  const [sentenceGrading, setSentenceGrading] = useState(false)
-  const [sentenceError, setSentenceError] = useState('')
-  /* 难度与题量：记在本机（"今天想练几句"是当下心情，不需要跨设备同步） */
-  const [sentenceCount, setSentenceCount] = useState(() => {
-    const v = Number(safeGet(SENTENCE_PREF_KEY, '') ? JSON.parse(safeGet(SENTENCE_PREF_KEY, '{}')).count : 0)
-    return v >= 1 && v <= 30 ? v : 5
-  })
-  const [sentenceDifficulty, setSentenceDifficulty] = useState(() => {
-    try { return JSON.parse(safeGet(SENTENCE_PREF_KEY, '{}')).difficulty || '中等' } catch { return '中等' }
-  })
-  const [sentenceBookOpen, setSentenceBookOpen] = useState(false)
-  /* 中文查词：先给候选词，用户挑一个再讲解 */
-  const [zhQuery, setZhQuery] = useState('')
-  const [zhCandidates, setZhCandidates] = useState([])
-  const [savedSentenceIds, setSavedSentenceIds] = useState([])
-  useEffect(() => {
-    safeSet(SENTENCE_PREF_KEY, JSON.stringify({ count: sentenceCount, difficulty: sentenceDifficulty }))
-  }, [sentenceCount, sentenceDifficulty])
-
   const cloud = useCloud({ getLocal: () => local, applyMerged, flash })
   const {
     syncCode, syncMeta, syncTip, syncBusy, lastSyncAt,
     runSync, forcePush, startNewSync, useExistingCode, copySyncCode, stopSync,
   } = cloud
+  /* 中文查词：先给候选词（内联在搜索栏下面），用户挑一个再讲解 */
+  const [zhQuery, setZhQuery] = useState('')
+  const [zhCandidates, setZhCandidates] = useState([])
+
+  /** 卸载后不要再 setState（轮询回调可能在卸载之后才回来） */
+  const aliveRef = useRef(true)
+
+  /* 造句练习：抽词口径与复习一致（本子 + 收藏，斩掉的排除） */
+  const sentencePool = useMemo(
+    () => [...new Map([...due, ...todayQueue].map((x) => [x.key, x])).values()],
+    [due, todayQueue],
+  )
+  const sentence = useSentencePractice({
+    pool: sentencePool,
+    fallbackWords: entries.map((e) => ({ key: e.id, head: e.head, entry: e, kind: 'entry' })),
+    aliveRef, level, settings, markWrong, clearWrongWord, addSentence, sentences,
+  })
+
   const auth = useAuth({ cloud, flash })
   const {
     account, authCfg, authBusy, authTip, authOpen, setAuthOpen, accountHasSync,
@@ -208,7 +191,6 @@ export default function App() {
     }
   }, [printJob])
 
-  const aliveRef = useRef(true)
   useEffect(() => () => { aliveRef.current = false }, [])
 
   /* 内联弹窗的 ESC 出口；设置、备份、账号、收藏夹在各自组件里 */
@@ -234,7 +216,6 @@ export default function App() {
       else mq.removeListener(onChange)
     }
   }, [theme])
-  useEffect(() => { saveSpell(reviewMode === 'spell') }, [reviewMode])
   useEffect(() => { saveFollowups(followups) }, [followups])
 
   /* 搜索框自动聚焦：**只在桌面端**。
@@ -280,7 +261,8 @@ export default function App() {
     if (!st) return
     setView(st.view || 'search')
     setActiveBookId(st.bookId || '')
-    if (st.view !== 'review') setReviewQueue(null)
+    // 复习队列是会话内的（刷新后重建），历史里只恢复视图/本子/弹窗
+    
     setSettingsOpen(st.modal === 'settings')
     setBackupOpen(st.modal === 'backup')
     setAuthOpen(st.modal === 'auth')
@@ -358,14 +340,6 @@ export default function App() {
    * 队列构成：本子里多少个 + 收藏夹多少个（"为什么是 46 而不是 15"一眼能答）。
    * ⚠️ 复习进行中必须按**这一轮的队列**算，不能按"此刻还到期的"——
    * 后者会随着每评一张卡一路缩水，出现"复习 19/43 但本子 0 · 收藏 25"这种自相矛盾的数字（实测）。
-   */
-  const queueMix = useMemo(() => {
-    const src = (view === 'review' && reviewQueue) ? reviewQueue : due
-    return {
-      book: src.filter((x) => x.kind === 'entry').length,
-      fav: src.filter((x) => x.kind === 'favorite').length,
-    }
-  }, [due, view, reviewQueue])
   /* 已斩掉的词（带释义，便于在管理弹窗里认出是哪个词） */
   const killedList = useMemo(() => {
     const keys = killedSet(killed, revived)
@@ -382,7 +356,7 @@ export default function App() {
   /** 中文查词第一步：只取候选词，不讲解（挑完再走查词） */
   const runZhLookup = async (q) => {
     setError(''); setBusy(true); setEntry(null); setProgress('正在找对应的英文词…')
-    setZhQuery(q); setZhCandidates([]); setView('zh')
+    setZhQuery(q); setZhCandidates([]); setView('search')
     try {
       const out = await submitAndPoll({
         submit: () => lookup({ term: q, zh: true, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
@@ -399,7 +373,10 @@ export default function App() {
       markBackendUp()
       const list = (out.data && out.data.candidates) || []
       if (!list.length) throw new Error('没找出对应的英文词 —— 换个更具体的说法再试（比如"羽毛球拍"）')
-      setZhCandidates(list)
+      // 标出"上次选的是哪个"，并把上次选的排到最前（同一个词重复查时通常还是想要同一个）
+      const lastPick = (() => { try { return JSON.parse(safeGet(ZH_PICK_KEY, '{}'))[q] || '' } catch { return '' } })()
+      setZhCandidates(list.map((c) => ({ ...c, last: c.word === lastPick }))
+        .sort((a, b) => (a.last === b.last ? 0 : a.last ? -1 : 1)))
       setProgress('')
     } catch (e) {
       setError(e.message || '找词失败')
@@ -457,6 +434,18 @@ export default function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** 用户在候选里挑了一个词：记下"上次选的是它"，然后走正常查词讲解 */
+  const pickZhWord = (word) => {
+    try {
+      const map = JSON.parse(safeGet(ZH_PICK_KEY, '{}'))
+      map[zhQuery] = word
+      safeSet(ZH_PICK_KEY, JSON.stringify(map))
+    } catch { /* 存不下就算了，不影响查词 */ }
+    setQuery(word)
+    setZhCandidates([])
+    runLookup(word)
   }
 
   /* ---------- 追问 ----------
@@ -646,244 +635,32 @@ export default function App() {
 
   /* ---------- 复习 ---------- */
   /**
-   * 进复习。
-   *  · 有到期的词 → 今天的复习队列（写排期）；
-   *  · 今天已经复习完了 → **今日加练**：把今天碰过的词再走一遍（只练不写排期）。
-   *    没有这条路径的话，一轮做完「今日待复习」就再也点不进去 ——
-   *    想临时补一遍拼写都没有入口（用户反馈）。
-   *  · 今天一个词都没碰过 → 才是真的没得练，给提示。
+   * 复习会话（模式、队列、评分、斩掉、错词练习）整个交给 hook。
+   * 「今日待复习」的语义：有到期的词 → 今天的队列；今天已复习完 → 今日加练（只练不写排期）；
+   * 今天一个词都没碰过 → 提示。两种情况都先让用户**选模式**再开跑。
    */
-  /**
-   * 点「今日待复习」→ **先选模式**（复习 / 拼写），选完直接按那个模式跑整轮。
-   *
-   * 为什么不是"进去之后再勾选"：勾选式的即时切换会把手里的卡当场变成拼写题（用户不接受），
-   * "勾选=预约到本轮结束再拼"又被说成"强制做完一轮才能拼、不符合习惯"。
-   * 合起来的正解就是**先进模式选择**。
-   */
-  const startReview = () => {
-    if (due.length) {
-      setPendingQueue({ items: due, kind: 'due' })
-      setView('review-setup')
-      return
-    }
-    if (todayQueue.length) {
-      setPendingQueue({ items: todayQueue, kind: 'today' })
-      setView('review-setup')
-      flash('今天的复习已完成 —— 这一轮是加练，不改变复习排期', TIP_LONG_MS)
-      return
-    }
-    flash('今天还没有学过的词 —— 去查几个新词，或在收藏夹里收几个')
-  }
+  const review = useReviewSession({
+    due, todayQueue, wrongQueue, gradeEntry, markStudied,
+    markWrong, clearWrongWord, killWord, flash,
+  })
+  const openReview = () => { if (review.openSetup() === 'setup') setView('review-setup') }
 
-  /** 开始这一轮：模式已定，practice 由"是不是加练 + 是不是拼写"决定 */
-  const beginReview = (mode) => {
-    const pending = pendingQueue || { items: [], kind: 'due' }
-    if (!pending.items.length) return
-    const m = mode || reviewMode
-    setReviewMode(m)
-    setReviewQueue(pending.items)
-    setReviewIndex(0); setRevealed(false)
-    setPractice(pending.kind !== 'due' || m === 'spell')
-    setReviewKind(pending.kind)
-    setPendingQueue(null)
-    setView('review')
-  }
-
-  /** 回合中途换模式：重开这一轮（明确的、可预期的行为，不做"半路变题"） */
-  const switchReviewMode = (mode) => {
-    if (mode === reviewMode || !reviewQueue) return
-    setReviewMode(mode)
-    setReviewIndex(0); setRevealed(false)
-    setPractice(reviewKind !== 'due' || mode === 'spell')
-    flash(mode === 'spell' ? '已切到拼写模式 —— 这一轮从头开始拼' : '已切回复习模式 —— 这一轮从头开始', TIP_LONG_MS)
-  }
-
-  /* 斩掉：立刻从当前这一轮里也拿掉（不然用户还要再看它一次） */
-  const killCurrent = (item) => {
-    killWord(item)
-    // index 不动：后面的卡自然补上来；如果斩的是最后一张，就会落到"本轮完成"。
-    setReviewQueue((q) => (q ? q.filter((x) => headKey(x.head) !== headKey(item.head)) : q))
-    setRevealed(false)
-    flash('已斩掉「' + (item.head || '') + '」，以后不再进复习清单', TIP_LONG_MS)
-  }
-  /** 完成页的「用拼写再过一遍」：同一批词、从第 1 个开始、只练不写排期 */
-  const startSpellRun = useCallback(() => {
-    setReviewMode('spell')
-    setPractice(true)
-    setReviewIndex(0); setRevealed(false)
-  }, [])
-  const grade = (g) => {
-    const cur = reviewQueue && reviewQueue[reviewIndex]
-    if (!cur) return
-    // 错词本：评「忘了」进本；评「简单」出本（说明这个坎过去了）。
-    // 练习模式同样记 —— "我到底哪些词不行"跟排期无关，练错了也是错。
-    if (g === 'forgot') markWrong(cur, 'forgot')
-    else if (g === 'easy') clearWrongWord(cur.head)
-    // 拼写练习（过完一轮后的加练）只练不写排期 —— 否则同一个词一天内被评两次，
-    // 间隔会被推得越来越长，"练"反而把复习计划搞乱
-    if (!practice) gradeEntry(cur, g)
-    else markStudied()
-    setReviewIndex((i) => i + 1); setRevealed(false)
-  }
-  /* 拼写出错 / 拼写时看了答案：也进错词本（ReviewPane 在那一刻回调） */
-  const noteSpellWrong = (item, reason) => markWrong(item, reason)
-  /* 只练错词：不动排期，练完按表现进出本 */
-  const startWrongReview = () => {
-    const q = wrongQueue()
-    if (!q.length) { flash('错词本里还没有能练的词'); return }
-    setWrongOpen(false)
-    setReviewQueue(q); setReviewIndex(0); setRevealed(false); setPractice(true)
-    setReviewMode('review'); setReviewKind('wrong'); setView('review')
-  }
-  /* 完成页的「用拼写再过一遍」 */
-  const restartSpell = () => {
-    if (!reviewQueue || !reviewQueue.length) return
-    startSpellRun()
-  }
+  const beginReview = (mode) => { review.begin(mode); setView('review') }
+  const startWrongReview = () => { if (review.startWrong()) { setWrongOpen(false); setView('review') } }
   const exitReview = () => {
-    const n = reviewQueue ? Math.min(reviewIndex, reviewQueue.length) : 0
-    setView('search'); setReviewQueue(null); setPractice(false); setPendingQueue(null)
+    const n = review.exit()
+    setView('search')
     if (n > 0) flash('这一轮复习完成，共 ' + n + ' 个词', TIP_LONG_MS)
   }
 
-  /* ---------- 造句练习 ----------
-   * 从单词本 + 收藏夹里抽词（斩掉的排除），两种模式共用一套批改。
-   * 抽词口径复用复习队列那套规则，所以"练什么"和"复习什么"是一致的。 */
-  const startSentence = async (mode) => {
-    const pool = [...new Map([...due, ...todayQueue].map((x) => [x.key, x])).values()]
-    const source = pool.length ? pool : entries.map((e) => ({ key: e.id, head: e.head, entry: e, kind: 'entry' }))
-    if (!source.length) { setSentenceError('还没有词可以练 —— 先查几个词，或在收藏夹里收几个'); setView('sentence'); return }
-    setSentenceError(''); setSentenceBusy(true); setSentenceGrade(null)
-    try {
-      // 一次抽 5 个：太少不像练习，太多一次批改等太久
-      const chosen = [...source].sort(() => Math.random() - 0.5).slice(0, sentenceCount)
-      const points = chosen.map((x) => {
-        const e = x.entry || {}
-        const f = x.favorite || {}
-        return [
-          x.head,
-          e.pos || f.pos || '',
-          (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || '',
-          (e.synonyms || []).slice(0, 2).map((s) => s.word + (s.diff ? '（' + s.diff + '）' : '')).join('；'),
-        ].filter(Boolean).join('｜')
-      })
-      const out = await submitAndPoll({
-        submit: () => sentencePractice({
-          mode: 'make', points, count: chosen.length, level, difficulty: sentenceDifficulty,
-          baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey,
-        }),
-        fetchJob: getSentenceJob,
-        intervalMs: POLL_SENTENCE_MS,
-        timeoutMs: TIMEOUT_SENTENCE_MS,
-        maxFailures: POLL_MAX_FAILURES,
-        netError: '网络不稳定，没拿到题目，请重试',
-        timeoutError: '出题超时了，稍后再点一次「开始」即可',
-        isAlive: () => aliveRef.current,
-      })
-      if (out.aborted) return
-      const items = (out.data && out.data.items) || []
-      if (!items.length) throw new Error('模型没有给出题目，请重试')
-      const byHead = new Map(chosen.map((x) => [String(x.head).toLowerCase(), x]))
-      setSentenceItems(items.map((it) => {
-        const hit = byHead.get(String(it.head).toLowerCase()) || {}
-        const e = hit.entry || {}
-        const f = hit.favorite || {}
-        return {
-          ...it,
-          phonetic: e.phonetic || f.phonetic || '',
-          meaning: (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || '',
-          key: hit.key || it.head,
-          entry: hit.entry || null,
-        }
-      }))
-      setSentenceMode(mode || 'free')
-      setSentenceIndex(0)
-      setView('sentence')
-    } catch (e) {
-      setSentenceError(e.message || '出题失败')
-      setView('sentence')
-    } finally {
-      setSentenceBusy(false)
+  const queueMix = useMemo(() => {
+    const src = (view === 'review' && review.queue) ? review.queue : due
+    return {
+      book: src.filter((x) => x.kind === 'entry').length,
+      fav: src.filter((x) => x.kind === 'favorite').length,
     }
-  }
+  }, [due, view, review.queue])
 
-  /** 提交批改：结果同时决定"进不进错词本"（与复习、拼写同一套出口） */
-  const gradeSentence = async (sentence) => {
-    const cur = sentenceItems[sentenceIndex]
-    if (!cur || !sentence || !String(sentence).trim()) return
-    setSentenceGrading(true); setSentenceError(''); setSentenceGrade(null)
-    try {
-      const out = await submitAndPoll({
-        submit: () => sentencePractice({
-          mode: 'grade',
-          head: cur.head,
-          brief: cur.meaning || '',
-          cn: sentenceMode === 'translate' ? cur.cn : '',
-          sentence: String(sentence).trim(),
-          level,
-          baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey,
-        }),
-        fetchJob: getSentenceJob,
-        intervalMs: POLL_SENTENCE_MS,
-        timeoutMs: TIMEOUT_SENTENCE_MS,
-        maxFailures: POLL_MAX_FAILURES,
-        netError: '网络不稳定，没拿到批改结果，请再提交一次',
-        timeoutError: '批改超时了，再点一次「提交批改」即可',
-        isAlive: () => aliveRef.current,
-      })
-      if (out.aborted) return
-      const g = out.data || {}
-      setSentenceGrade({ ...g, sentence: String(sentence).trim() })
-      if (g.usesTarget === false || (Number(g.score) || 0) < 60) {
-        markWrong({ head: cur.head, entry: cur.entry, brief: cur.meaning }, 'forgot')
-      } else if ((Number(g.score) || 0) >= 85) {
-        clearWrongWord(cur.head)
-      }
-    } catch (e) {
-      setSentenceError(e.message || '批改失败')
-    } finally {
-      setSentenceGrading(false)
-    }
-  }
-  /** 收进错句本：完全由用户决定（不做自动收藏，这是"私人收藏"而不是"薄弱项"） */
-  const saveSentence = () => {
-    const cur = sentenceItems[sentenceIndex]
-    if (!cur || !sentenceGrade) return
-    const id = addSentence({
-      head: cur.head, phonetic: cur.phonetic, meaning: cur.meaning,
-      mode: sentenceMode, cn: sentenceMode === 'translate' ? cur.cn : '',
-      sentence: sentenceGrade.sentence || '', score: sentenceGrade.score,
-      verdict: sentenceGrade.verdict, corrected: sentenceGrade.corrected,
-      suggestion: sentenceGrade.suggestion, problems: sentenceGrade.problems,
-      difficulty: sentenceDifficulty,
-    })
-    // 标记"这一条已收藏"：批改结果本身没有 id（是服务端返回的批改对象），
-    // 所以要挂在本地状态上，否则按钮永远显示"收进错句本"（实测踩过）
-    if (id) {
-      setSavedSentenceIds((prev) => [...prev, id])
-      setSentenceGrade((g) => (g ? { ...g, savedId: id } : g))
-    }
-  }
-  const practiceWordAgain = (item) => {
-    setSentenceBookOpen(false)
-    setSentenceItems([{ head: item.head, cn: item.cn || '', tip: '', phonetic: item.phonetic || '', meaning: item.meaning || '', key: item.head }])
-    setSentenceMode(item.mode === 'translate' && item.cn ? 'translate' : 'free')
-    setSentenceIndex(0); setSentenceGrade(null); setSentenceError(''); setView('sentence')
-  }
-  /** 用户在候选里挑了一个词：记下"上次选的是它"，然后走正常查词 */
-  const pickZhWord = (word) => {
-    try {
-      const map = JSON.parse(safeGet(ZH_PICK_KEY, '{}'))
-      map[zhQuery] = word
-      safeSet(ZH_PICK_KEY, JSON.stringify(map))
-    } catch { /* 存不下就算了，不影响查词 */ }
-    setQuery(word)
-    setView('search')
-    runLookup(word)
-  }
-
-  const nextSentence = () => { setSentenceGrade(null); setSentenceIndex((i) => i + 1) }
-  const exitSentence = () => { setView('search'); setSentenceItems([]); setSentenceGrade(null); setSentenceError('') }
 
   /* ---------- 自测题 ---------- */
   const runQuiz = async () => {
@@ -942,11 +719,11 @@ export default function App() {
   /* 侧栏与顶栏要的一堆小东西，打包传下去，免得 20 个 prop 铺满 JSX */
   const topbarProps = {
     sidebarOpen, onToggleSidebar: toggleSidebar,
-    dueCount: due.length, onStartReview: startReview, nextDue,
+    dueCount: due.length, onStartReview: openReview, nextDue,
     statusChecking,
     onRetryStatus: retryStatus,
     onOpenQuiz: () => setQuizSetupOpen(true), quizDisabled: !entries.length,
-    onOpenSentence: () => { setSentenceItems([]); setSentenceGrade(null); setSentenceError(''); setView('sentence') },
+    onOpenSentence: () => { sentence.reset(); setView('sentence') },
     sentenceDisabled: !entries.length && !favorites.length,
     account, onOpenAuth: () => setAuthOpen(true),
     status, hasKey, stats, streak, syncCode, lastSyncAt,
@@ -998,41 +775,37 @@ export default function App() {
             onDismiss={hideSafety} />
         ) : null}
 
-        {view === 'review' && reviewQueue ? (
-          <ReviewPane queue={reviewQueue} index={reviewIndex} revealed={revealed} schedule={schedule}
-            mode={reviewMode} onSwitchMode={switchReviewMode}
-            practice={practice} killedCount={killedList.length} wrongCount={wrongItems.length}
+        {view === 'review' && review.queue ? (
+          <ReviewPane queue={review.queue} index={review.index} revealed={review.revealed} schedule={schedule}
+            mode={review.mode} onSwitchMode={review.switchMode}
+            practice={review.practice} killedCount={killedList.length} wrongCount={wrongItems.length}
             practiceLabel={[
-              reviewMode === 'spell' ? '拼写练习' : '',
-              reviewKind === 'wrong' ? '错词练习' : reviewKind === 'today' ? '今日加练' : '',
+              review.mode === 'spell' ? '拼写练习' : '',
+              review.kind === 'wrong' ? '错词练习' : review.kind === 'today' ? '今日加练' : '',
             ].filter(Boolean).join(' · ')}
-            mix={practice ? null : queueMix}
-            onRestartSpell={restartSpell}
+            mix={review.practice ? null : queueMix}
+            onRestartSpell={review.restartSpell}
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
-            onSpellWrong={noteSpellWrong}
-            onReveal={() => setRevealed(true)} onGrade={grade} onKill={killCurrent} onExit={exitReview} />
+            onSpellWrong={review.noteSpellWrong}
+            onReveal={() => review.setRevealed(true)} onGrade={review.grade} onKill={review.kill} onExit={exitReview} />
         ) : view === 'review-setup' ? (
-          <ReviewSetup queue={(pendingQueue && pendingQueue.items) || []} mix={queueMix}
-            kind={pendingQueue ? pendingQueue.kind : 'due'}
-            mode={reviewMode} setMode={setReviewMode}
+          <ReviewSetup queue={(review.pending && review.pending.items) || []} mix={queueMix}
+            kind={review.pending ? review.pending.kind : 'due'}
+            mode={review.mode} setMode={review.setMode}
             onStart={beginReview}
-            onExit={() => { setPendingQueue(null); setView('search') }} />
-        ) : view === 'zh' ? (
-          <ZhPicker term={zhQuery} items={zhCandidates} busy={busy} error={error}
-            lastPick={(() => { try { return JSON.parse(safeGet(ZH_PICK_KEY, '{}'))[zhQuery] || '' } catch { return '' } })()}
-            onPick={(c) => pickZhWord(c.word)}
-            onCancel={() => { setView('search'); setError(''); setProgress('') }} />
+            onExit={() => { review.setPending(null); setView('search') }} />
         ) : view === 'sentence' ? (
           <SentencePane
-            items={sentenceItems} index={sentenceIndex} mode={sentenceMode} setMode={setSentenceMode}
-            busy={sentenceBusy} grading={sentenceGrading} grade={sentenceGrade} error={sentenceError}
-            count={sentenceCount} setCount={setSentenceCount}
-            difficulty={sentenceDifficulty} setDifficulty={setSentenceDifficulty}
-            onSaveSentence={saveSentence}
-            isSaved={Boolean(sentenceGrade && (sentenceGrade.savedId || savedSentenceIds.includes(sentenceGrade.id)))}
-            bookCount={sentences.length} onOpenBook={() => setSentenceBookOpen(true)}
-            onStart={startSentence} onGrade={gradeSentence} onNext={nextSentence} onExit={exitSentence}
-            onRetryGrade={() => sentenceGrade && gradeSentence(sentenceGrade.sentence)} />
+            items={sentence.items} index={sentence.index} mode={sentence.mode} setMode={sentence.setMode}
+            busy={sentence.busy} grading={sentence.grading} grade={sentence.grade} error={sentence.error}
+            count={sentence.count} setCount={sentence.setCount}
+            difficulty={sentence.difficulty} setDifficulty={sentence.setDifficulty}
+            onSaveSentence={sentence.save} isSaved={sentence.isSaved}
+            bookCount={sentence.bookCount} onOpenBook={() => sentence.setBookOpen(true)}
+            onStart={(m) => { sentence.start(m).then(() => setView('sentence')) }}
+            onGrade={sentence.submit} onNext={sentence.next}
+            onExit={() => { setView('search'); sentence.reset() }}
+            onRetryGrade={() => sentence.grade && sentence.submit(sentence.grade.sentence)} />
         ) : view === 'quiz' ? (
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
@@ -1064,6 +837,9 @@ export default function App() {
             onExportPdf={(e) => startPrint({ kind: 'entry', entry: e })}
             onToggleFavorite={toggleFavorite} isFavorite={isFavorite}
             onSave={saveToBook} onCreateBook={createAndSave} onLookupWord={runLookup}
+            zhTerm={zhQuery} zhItems={zhCandidates}
+            onPickZh={(c) => pickZhWord(c.word)}
+            onDismissZh={() => { setZhCandidates([]); setZhQuery('') }}
             onAsk={askFollowup} askBusy={askBusy} askError={askError}
             followups={entry ? (followups[entry.id] || []) : []} onClearFollowups={clearFollowups} />
         )}
@@ -1117,9 +893,10 @@ export default function App() {
         <MergeBookModal from={mergeTarget} books={books} onClose={() => setMergeTarget(null)} onSubmit={submitMerge} />
       ) : null}
 
-      {sentenceBookOpen ? (
-        <SentenceBookModal items={sentences} onClose={() => setSentenceBookOpen(false)}
-          onDelete={deleteSentence} onPracticeWord={practiceWordAgain} />
+      {sentence.bookOpen ? (
+        <SentenceBookModal items={sentences} onClose={() => sentence.setBookOpen(false)}
+          onDelete={deleteSentence}
+          onPracticeWord={(it) => { sentence.practiceWord(it); setView('sentence') }} />
       ) : null}
 
       {wrongOpen ? (

@@ -33,7 +33,7 @@ export default function WrongBookModal({ items, onClose, onPractice, onRemove, o
           <>
             <ul className="wrong-list">
               {items.map((w) => (
-                <li key={w.key} className="wrong-row">
+                <li key={w.key || w.head} className="wrong-row">
                   <div className="wrong-main">
                     <div className="wrong-head">
                       <strong>{w.head}</strong>

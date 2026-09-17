@@ -1205,3 +1205,43 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offs
 
 /* 「更多」菜单里的版本行：等宽 + 淡一点，不抢状态行的注意力 */
 .more-menu-info .menu-build { opacity: .75; font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   安卓（Chrome）专项：这几条 iOS 上不需要，安卓上不做就会出问题
+   ========================================================================== */
+
+/* ① 字体放大（Font Boosting）：安卓 Chrome 会自作主张把长段正文放大，
+      同一份代码在安卓上字号比 iOS 大一截，精心调过的排版会撑破。
+      只在打印里写过这一条，现在提到全局。 */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* ② 点按高亮：安卓每次点击都会闪一个半透明方块（iOS 没有），
+      在卡片/列表上看着像"选中了"；用 background 自绘反馈代替它。 */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* ③ 下拉刷新：安卓 Chrome 在页面顶部继续下拉会**刷新整页** ——
+      复习划卡、造句输入时手一抖就把整轮打断。滚动容器里禁用过度滚动链。 */
+body, .editor, .sidebar, .modal, .sentence-input {
+  overscroll-behavior-y: contain;
+}
+
+/* ④ 地址栏：安卓 Chrome 的地址栏会随滚动收起/展开，100vh 因此比可视区域高，
+      弹窗底部会被顶到地址栏后面点不到。dvh 跟着可视高度走（老浏览器回退到 vh）。 */
+.modal {
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+}
+.modal-mask { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+
+/* 中文候选面板（内联版）：长在搜索栏下面，标题一行 + 候选列表 */
+.zh-picker {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--info-line); background: var(--info-bg);
+}
+.zh-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.zh-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
+.zh-head .icon-btn { margin-left: auto; }

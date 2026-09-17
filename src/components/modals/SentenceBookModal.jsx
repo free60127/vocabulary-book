@@ -21,7 +21,7 @@ export default function SentenceBookModal({ items, onClose, onDelete, onPractice
 
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal sentence-book" role="dialog" ref={trapRef} aria-label="错句本" onClick={(e) => e.stopPropagation()}>
+      <div className="modal sentence-book" role="dialog" aria-modal="true" ref={trapRef} aria-label="错句本" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3><NotebookPen size={16} />错句本{items.length ? `（${items.length}）` : ''}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="关闭"><X size={16} /></button>

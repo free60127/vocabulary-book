@@ -66,7 +66,8 @@ const PROFILES = [
   { id: 'ipad', label: 'iPad 竖屏 820×1180', touch: true, opts: { ...devices['iPad (gen 7)'] } },
   { id: 'iphone13', label: 'iPhone 13 390×844', touch: true, opts: { ...devices['iPhone 13'] } },
   { id: 'iphonese', label: 'iPhone SE 320×568（最小屏）', touch: true, opts: { ...devices['iPhone SE'] } },
-  { id: 'android', label: 'Android 412×915', touch: true, opts: { ...devices['Pixel 7'] } },
+  { id: 'android', label: 'Android 412×915（Pixel 7）', touch: true, opts: { ...devices['Pixel 7'] } },
+  { id: 'android-s', label: 'Android 393×727（Pixel 5，dpr 2.75）', touch: true, opts: { ...devices['Pixel 5'] } },
   { id: 'phone-flat', label: '手机横屏 844×390', touch: true, opts: { viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } },
 ].filter((p) => !ONLY.length || ONLY.includes(p.id));
 
@@ -189,7 +190,7 @@ async function runProfile(browser, p) {
   const page = await ctx.newPage();
   const logs = [];
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logs.push(`${m.type()}: ${m.text()}`); });
-  page.on('pageerror', (e) => logs.push('pageerror: ' + e.message));
+  page.on('pageerror', (e) => logs.push('pageerror: ' + e.message + ' @ ' + String(e.stack || '').split(String.fromCharCode(10)).slice(1, 3).join(' ').slice(0, 220)));
   page.on('requestfailed', (r) => logs.push(`requestfailed: ${r.url()} ${r.failure()?.errorText || ''}`));
   const prompts = [];
   page.on('dialog', (d) => d.accept(d.type() === 'prompt'
@@ -324,7 +325,10 @@ async function runProfile(browser, p) {
     {
       await page.fill('.search-input', '羽毛球');
       await page.keyboard.press('Enter');
+      // 候选面板是**内联**在搜索栏下面的：搜索框必须还在（用户能改词重搜）
       await page.waitForSelector('.zh-picker', { timeout: 60000 });
+      check(p.id, '中文候选内联在搜索栏下方（输入框还在，可以改词重搜）',
+        (await page.locator('.search-input').count()) === 1, '搜索框存在=' + (await page.locator('.search-input').count()));
       // ⚠️ 面板先出来、候选是异步到的：必须等条目渲染出来再断言，否则读到的是"正在找词…"的空列表
       await page.waitForSelector('.zh-item', { timeout: 60000 });
       await page.waitForTimeout(300);
@@ -1388,6 +1392,108 @@ async function runEdgeCases(browser) {
     }));
     check(P, '跨过 00:00 不用刷新就翻篇（新的词进今日待复习）', /\(1\)/.test(after.due), `${after.due} · 页面时间 ${after.now}`);
     await page.screenshot({ path: path.join(SHOTS, 'midnight-rollover.png') }).catch(() => {});
+    await ctx.close();
+  }
+
+  /* ②a Android 专项：iOS 上不需要、安卓上不做就会出问题的几条
+        （字体放大 / 点按高亮 / 下拉刷新 / 地址栏高度 / 返回键 / 触摸滑动） */
+  {
+    const ctx = await browser.newContext({ ...devices['Pixel 7'] });
+    await ctx.addInitScript(() => {
+      const now = Date.now();
+      const entries = Array.from({ length: 4 }, (_, i) => ({ id: 'wb-' + i, head: 'word' + i, kind: 'word', brief: '释义' + i, meanings: [{ cn: '释义' + i }], createdAt: now - 86400000 }));
+      localStorage.setItem('vb-books', JSON.stringify([{ id: 'bk-1', name: '安卓测试本', note: '', createdAt: now - 86400000, entries }]));
+    });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 100)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.waitForTimeout(400);
+
+    // ① 安卓 Chrome 会放大长段正文（font boosting）——必须显式关掉
+    const css = await page.evaluate(() => {
+      const html = getComputedStyle(document.documentElement);
+      const body = getComputedStyle(document.body);
+      return {
+        textAdjust: html.webkitTextSizeAdjust || html.getPropertyValue('-webkit-text-size-adjust') || '(无)',
+        tapHighlight: body.getPropertyValue('-webkit-tap-highlight-color') || '(无)',
+        overscrollBody: body.getPropertyValue('overscroll-behavior-y') || body.overscrollBehaviorY || '(无)',
+        isAndroid: /Android/i.test(navigator.userAgent),
+        ua: navigator.userAgent.slice(0, 46),
+      };
+    });
+    check(P, 'Android：关掉字体自动放大（否则安卓字号比 iOS 大一截）',
+      /100%/.test(css.textAdjust), `-webkit-text-size-adjust=${css.textAdjust}`);
+    check(P, 'Android：点按高亮已去掉（不再闪方块）',
+      /rgba\(0, 0, 0, 0\)|transparent/.test(css.tapHighlight), css.tapHighlight);
+    check(P, 'Android：禁用下拉刷新链（手一抖不会刷新整页）',
+      /contain|none/.test(css.overscrollBody), css.overscrollBody);
+    check(P, 'Android UA 确实生效（这条场景跑的是真安卓 UA）', css.isAndroid, css.ua);
+
+    // ② 地址栏收起/展开：可视高度突变时布局不能破、底部按钮不能被顶出视野
+    await page.locator('.due-btn').click();
+    await page.waitForSelector('.review-setup', { timeout: 8000 });
+    await page.locator('.review-setup .primary-btn').click();
+    await page.waitForSelector('.review-word', { timeout: 8000 });
+    await page.locator('.review-word').click().catch(() => {});
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      gradeVisible: (() => { const g = document.querySelector('.grade-bar'); if (!g) return false; const r = g.getBoundingClientRect(); return r.bottom <= window.innerHeight + 1 && r.top >= 0; })(),
+    }));
+    check(P, 'Android：地址栏展开时评分条完整可见', before.gradeVisible && !before.overflow, JSON.stringify(before));
+    // 地址栏收起 → 可视高度变大；再展开 → 变小（模拟真实抖动）
+    await page.setViewportSize({ width: 412, height: 700 });
+    await page.waitForTimeout(350);
+    const short = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      gradeVisible: (() => { const g = document.querySelector('.grade-bar'); if (!g) return false; const r = g.getBoundingClientRect(); return r.bottom <= window.innerHeight + 1; })(),
+      btnClickable: (() => { const b = document.querySelector('.grade-bar .grade-ok'); return Boolean(b); })(),
+    }));
+    check(P, 'Android：可视高度变小（地址栏/键盘）后仍不溢出、按钮还在',
+      !short.overflow && short.gradeVisible && short.btnClickable, JSON.stringify(short));
+    await page.setViewportSize({ width: 412, height: 839 });
+
+    // ③ 触摸滑动评分：安卓走的是 touches 事件（changetouches）
+    const card = page.locator('.review-answer');
+    if (await card.count()) {
+      const box = await card.boundingBox();
+      if (box) {
+        await page.touchscreen.tap(box.x + 10, box.y + 10).catch(() => {});
+        await page.waitForTimeout(200);
+      }
+    }
+
+    // ④ 安卓返回键 = history back：弹窗关闭、视图回退，且不退出应用
+    await page.locator('.review-head-tools .ghost-btn').click().catch(() => {});
+    await page.waitForTimeout(400);
+    const hist0 = await page.evaluate(() => history.length);
+    await page.locator('.side-toggle').click();
+    await page.waitForTimeout(350);
+    await page.locator('.side-footer button', { hasText: 'AI 设置' }).click();
+    await page.waitForSelector('.modal', { timeout: 8000 });
+    await page.goBack();
+    await page.waitForTimeout(500);
+    const afterBack = await page.evaluate(() => ({
+      modal: Boolean(document.querySelector('.modal')),
+      alive: Boolean(document.querySelector('.status-chip')),
+      hist: history.length,
+    }));
+    check(P, 'Android：返回键关弹窗（不是退出应用）', !afterBack.modal && afterBack.alive, JSON.stringify({ ...afterBack, hist0 }));
+
+    // ⑤ 弹窗在矮视口里不超出可视高度（安卓地址栏 + 键盘会让 100vh 失真）
+    await page.setViewportSize({ width: 412, height: 620 });
+    await page.waitForTimeout(250);
+    if (await page.locator('.sidebar').isHidden()) { await page.locator('.side-toggle').click(); await page.waitForTimeout(300); }
+    await page.locator('.side-footer button', { hasText: 'AI 设置' }).click().catch(() => {});
+    const modalBox = await page.locator('.modal').first().boundingBox().catch(() => null);
+    check(P, 'Android：矮视口下弹窗不超出可视高度（用 dvh 而不是 vh）',
+      Boolean(modalBox) && modalBox.height <= 620 - 20, modalBox ? `弹窗高 ${Math.round(modalBox.height)} / 视口 620` : '弹窗没打开');
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.setViewportSize({ width: 412, height: 839 });
+    check(P, 'Android 场景无未捕获异常', errs.length === 0, errs.join(' | '));
+    await page.screenshot({ path: path.join(SHOTS, 'android-special.png') }).catch(() => {});
     await ctx.close();
   }
 
