@@ -80,7 +80,7 @@ export default function App() {
     markStudied, applyMerged,
     saveEntry, importEntries, newBook, deleteEntry: dropEntry, deleteBook: dropBook, renameBook, mergeBooksInto,
     pushHistoryEntry, attachFavoriteEntry,
-    isFavorite, toggleFavorite, removeFavoriteById,
+    isFavorite, toggleFavorite, removeFavoriteById, backfillFavorites, getFavorite,
     killed, revived, killWord, reviveWord, wrongItems, markWrong, clearWrongWord, wrongQueue,
     gradeEntry, exportBackup, importBackup,
   } = store
@@ -411,6 +411,7 @@ export default function App() {
           requestAnimationFrame(() => toTop({ smooth: false }))
           pushHistoryEntry(se)
           attachFavoriteEntry(se)
+          backfillFavorites(se)
           if (saveToBookId) {
             const { bookName } = saveEntry(saveToBookId, se)
             flash('已加入「' + bookName + '」：' + se.head, TIP_LONG_MS)
@@ -451,6 +452,7 @@ export default function App() {
       pushHistoryEntry(e)
       // 这个词如果是从收藏夹点过来查的，把完整词条补进那条收藏（之后「加入词库」就能一步完成）
       attachFavoriteEntry(e)
+      backfillFavorites(e)   // 顺手把老收藏缺的差别/例句补上（数据就在这张卡片里）
       // 从收藏夹点「查后加入」：查完直接落进选中的本子，省掉"再点一次保存"
       if (saveToBookId) {
         const { bookName } = saveEntry(saveToBookId, e)
@@ -678,6 +680,43 @@ export default function App() {
       + `移入 ${moved} 个词条${skipped ? `，覆盖同词头 ${skipped} 个` : ''}`, TIP_LONG_MS)
   }
 
+  /**
+   * 复习卡上的「补上差别和例句」。
+   *
+   * 老收藏（2026-09-17 之前收的）没有 diff/例句字段，光改代码补不回来 ——
+   * 这里用**一次查词**把它取回来：查 `from`（收藏时的主词）最好，
+   * 因为它那张卡片里就写着"这条收藏与它的差别"；没有 from 就查这个词自己（至少能补例句）。
+   * 查过的词命中服务端缓存，等于免费。
+   */
+  const [fillBusy, setFillBusy] = useState(false)
+  const fillFavorite = async (item) => {
+    const fav = (item && item.favorite) || {}
+    const term = String(fav.from || fav.head || (item && item.head) || '').trim()
+    if (!term || fillBusy) return
+    setFillBusy(true)
+    try {
+      const out = await submitAndPoll({
+        submit: () => lookup({ term, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
+        fetchJob: getLookupJob,
+        intervalMs: POLL_LOOKUP_MS, timeoutMs: TIMEOUT_LOOKUP_MS, maxFailures: POLL_MAX_FAILURES,
+        netError: '网络不稳定，暂时取不到结果，请重试',
+        timeoutError: '补齐超时了，稍后再试一次即可。',
+        isAlive: () => aliveRef.current,
+      })
+      if (out.aborted) return
+      const e = out.data && out.data.entry
+      if (!e) throw new Error('这次没有取到词条')
+      const changed = backfillFavorites(e)
+      flash(changed
+        ? `已补上「${fav.head}」的差别与例句`
+        : `「${term}」这张卡片里没有「${fav.head}」的辨析 —— 到收藏夹里点它自己查一次就能补例句`, TIP_LONG_MS)
+    } catch (err) {
+      flash('补齐失败：' + ((err && err.message) || '请稍后再试'), TIP_LONG_MS)
+    } finally {
+      setFillBusy(false)
+    }
+  }
+
   /* ---------- 复习 ---------- */
   /**
    * 复习会话（模式、队列、评分、斩掉、错词练习）整个交给 hook。
@@ -833,7 +872,8 @@ export default function App() {
             onRestartSpell={review.restartSpell}
             onManageKilled={() => setKilledOpen(true)} onManageWrong={() => setWrongOpen(true)}
             onSpellWrong={review.noteSpellWrong}
-            onReveal={() => review.setRevealed(true)} onGrade={review.grade} onKill={review.kill} onExit={exitReview} />
+            onReveal={() => review.setRevealed(true)} onGrade={review.grade} onKill={review.kill} onExit={exitReview}
+            onFillFavorite={fillFavorite} fillBusy={fillBusy} favoriteOf={getFavorite} />
         ) : view === 'review-setup' ? (
           <ReviewSetup queue={(review.pending && review.pending.items) || []} mix={queueMix}
             kind={review.pending ? review.pending.kind : 'due'}

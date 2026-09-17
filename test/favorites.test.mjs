@@ -10,7 +10,7 @@
  * 跑法：node test/favorites.test.mjs
  */
 import {
-  addFavorite, attachEntryToFavorite, favoriteId, findFavorite, loadFavorites,
+  addFavorite, attachEntryToFavorite, backfillFavoritesFromEntry, favoriteId, findFavorite, loadFavorites,
   mergeFavorites, removeFavorite, sanitizeFavorite,
 } from '../src/favorites.js';
 
@@ -102,6 +102,42 @@ console.log('\n' + '='.repeat(62));
     merged[0].diff === '褒贬正好相反' && merged[0].usage === '正式写作', JSON.stringify(merged[0]).slice(0, 60));
   const added = addFavorite([], { head: 'whim', diff: '与 caprice 的差别：whim 更轻', from: 'caprice' });
   check('新收藏走 addFavorite 也带上差别', added[0].diff.length > 0 && added[0].from === 'caprice');
+}
+
+
+/* ---------- 用刚查到的词条回填老收藏（差别 / 用法 / 例句） ---------- */
+{
+  // 老收藏：只有词头与来源，没有辨析字段（2026-09-17 之前收的就是这样）
+  const old = sanitizeFavorite({ head: 'bespoke', brief: '定制的', from: 'ad hoc' });
+  const srcEntry = {
+    head: 'ad hoc',
+    synonyms: [{
+      word: 'bespoke', cn: '定制的', phonetic: '/bɪˈspəʊk/',
+      diff: '褒贬正好相反', usage: '正式写作', example: 'a bespoke suit', exampleCn: '定做的西装',
+    }],
+    examples: [{ en: 'ad hoc measures', cn: '临时措施' }],
+  };
+  const r1 = backfillFavoritesFromEntry([old], srcEntry);
+  check('看到源词时自动补上老收藏的差别/用法/例句',
+    r1.changed && r1.list[0].diff === '褒贬正好相反' && r1.list[0].usage === '正式写作'
+      && r1.list[0].example === 'a bespoke suit' && r1.list[0].phonetic === '/bɪˈspəʊk/',
+    JSON.stringify(r1.list[0]).slice(0, 90));
+
+  // 已填好的不该被覆盖（用户可能手改过）
+  const filled = sanitizeFavorite({ head: 'bespoke', from: 'ad hoc', diff: '我自己写的' });
+  const r2 = backfillFavoritesFromEntry([filled], srcEntry);
+  // 注意：**空字段会被补上**（usage/例句），但已有值绝不能被覆盖 —— 用户可能手改过
+  check('已有内容不被回填覆盖（空字段可以补，有值的不动）',
+    r2.list[0].diff === '我自己写的' && r2.list[0].usage === '正式写作', JSON.stringify(r2.list[0]).slice(0, 80));
+
+  // 看的是收藏词自己 → 至少能补例句
+  const self = sanitizeFavorite({ head: 'ad hoc' });
+  const r3 = backfillFavoritesFromEntry([self], srcEntry);
+  check('看收藏词自己时补上例句', r3.changed && r3.list[0].example === 'ad hoc measures', JSON.stringify(r3.list[0]).slice(0, 70));
+
+  // 无关词条不动任何数据
+  const r4 = backfillFavoritesFromEntry([old], { head: 'unrelated', synonyms: [] });
+  check('无关卡片不会误改收藏', !r4.changed);
 }
 
 const failed = results.filter((r) => !r.ok);

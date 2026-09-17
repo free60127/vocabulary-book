@@ -8,9 +8,15 @@ const KEY_TO_GRADE = { 1: 'forgot', 2: 'normal', 3: 'easy' };
 const HINT_MAX = 3;
 
 /** 复习卡片上的内容：词条（本子里的）与收藏项字段不同，统一在这里取 */
-function cardOf(item) {
+/**
+ * 把"队列项"整理成卡片要显示的字段。
+ * `item.favorite` 是**进队列时的快照**；外面若给了 `favoriteOf`，用实时那份覆盖 ——
+ * 否则「补上差别和例句」点完数据存进去了，卡片却还是旧的（实测踩过）。
+ */
+function cardOf(item, favoriteOf) {
   const e = item.entry || {};
-  const f = item.favorite || {};
+  const live = favoriteOf ? favoriteOf(item.head || (item.favorite && item.favorite.head)) : null;
+  const f = live || item.favorite || {};
   return {
     head: item.head || e.head || f.head || '',
     phonetic: item.phonetic || e.phonetic || f.phonetic || '',
@@ -53,7 +59,7 @@ function cardOf(item) {
 export default function ReviewPane({
   queue, index, revealed, schedule, mode, onSwitchMode, practice, practiceLabel, killedCount, wrongCount, mix,
   onReveal, onGrade, onKill, onRestartSpell, onExit, onManageKilled, onManageWrong,
-  onSpellWrong,
+  onSpellWrong, onFillFavorite, fillBusy, favoriteOf,
 }) {
   // 模式在**进来之前**就定好了（见 ReviewSetup）：整轮要么复习、要么拼写，中途不玩花样。
   const spelling = mode === 'spell';
@@ -109,7 +115,7 @@ export default function ReviewPane({
   const submitSpelling = (e) => {
     if (e) e.preventDefault();
     if (solved || !item) return;
-    const c = cardOf(item);
+    const c = cardOf(item, favoriteOf);
     if (!checkSpelling(answer, c.head)) {
       setMissCount((n) => n + 1);
       if (onSpellWrong) onSpellWrong(item, 'spell');   // 拼错就进错词本
@@ -167,7 +173,7 @@ export default function ReviewPane({
     );
   }
 
-  const c = cardOf(item);
+  const c = cardOf(item, favoriteOf);
   const s = scheduleOf(schedule, item.key, 0);
 
   return (
@@ -258,6 +264,14 @@ export default function ReviewPane({
             ) : null}
             {c.fromFavorite ? (
               <p className="muted small">这条来自收藏夹（还没收进单词本）。</p>
+            ) : null}
+            {/* 老收藏（或模型当时没给辨析）会缺"差别/例句" —— 给一条自助补齐的路，
+                用一次查词把数据取回来（查过的词走缓存，等于免费） */}
+            {c.fromFavorite && !c.diff && !c.example && onFillFavorite ? (
+              <button className="ghost-btn fill-fav-btn" disabled={fillBusy}
+                onClick={() => onFillFavorite(item)}>
+                {fillBusy ? '正在补…' : '补上「差别」和例句'}
+              </button>
             ) : null}
             <div className="grade-bar">
               {GRADE_KEYS.map((g) => (

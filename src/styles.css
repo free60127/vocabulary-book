@@ -1364,3 +1364,6 @@ body, .editor, .sidebar, .modal, .sentence-input {
 }
 .import-newbook { display: flex; align-items: center; gap: 8px; flex: 1; }
 .import-newbook-name { flex: 1; min-width: 120px; }
+
+/* 复习卡上的「补上差别和例句」：低频动作，做成不抢眼的按钮 */
+.fill-fav-btn { margin-top: 8px; font-size: 12.5px; padding: 6px 10px; }

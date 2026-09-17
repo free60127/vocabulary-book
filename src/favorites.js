@@ -15,6 +15,8 @@
 export const favoriteId = (head) => 'fav-' + String(head || '').trim().toLowerCase().replace(/\s+/g, '-').slice(0, 50);
 
 const S = (v, max) => String(v == null ? '' : v).slice(0, max);
+/** 词头比较：大小写与首尾空格不敏感（"Grudge" 和 "grudge" 是同一个词） */
+const headKey = (v) => S(v, 200).trim().toLowerCase();
 
 /**
  * 规整一条收藏（导入/同步回来的同样不可信）。
@@ -88,6 +90,52 @@ export function attachEntryToFavorite(list, entry) {
     return { ...f, entry };
   });
   return hit ? next : list;
+}
+
+/**
+ * 用刚查到的词条**回填收藏的辨析信息**。
+ *
+ * 两种回填，都在"用户刚好看到那张卡片"时顺手做掉，不花额外的钱：
+ *  ① 看的是**源词**（收藏时的主词，`favorite.from`）：它的近义词列表里就有这条收藏的 `diff/usage/例句`
+ *     —— 这正是当初收藏时该存下来的东西；
+ *  ② 看的是**收藏词自己**：它自己的例句可以补上（收藏时可能没有，或模型当时没给）。
+ *
+ * 为什么需要这个：2026-09-17 之前收藏的词**没有存过** diff/例句（那时没这个字段），
+ * 光靠改代码补不回来 —— 但只要用户再看一眼源词，数据就自动补齐了。
+ *
+ * @returns {{list:Array, changed:boolean}}
+ */
+export function backfillFavoritesFromEntry(list, entry) {
+  const src = Array.isArray(list) ? list : [];
+  if (!entry || !entry.head) return { list: src, changed: false };
+  const entryHead = headKey(entry.head);
+  const syns = Array.isArray(entry.synonyms) ? entry.synonyms : [];
+  const firstExample = Array.isArray(entry.examples) && entry.examples[0] ? entry.examples[0] : null;
+  let changed = false;
+
+  const next = src.map((f) => {
+    if (!f || !f.head) return f;
+    const patch = {};
+    // ① 这条收藏当初是从 entry 上收的 → 在近义词里找它自己
+    if (headKey(f.from) === entryHead) {
+      const syn = syns.find((s) => s && headKey(s.word) === headKey(f.head));
+      if (syn) {
+        if (!f.diff && syn.diff) patch.diff = syn.diff;
+        if (!f.usage && syn.usage) patch.usage = syn.usage;
+        if (!f.example && syn.example) { patch.example = syn.example; patch.exampleCn = syn.exampleCn || ''; }
+        if (!f.phonetic && syn.phonetic) patch.phonetic = syn.phonetic;
+      }
+    }
+    // ② 看的就是收藏词自己 → 用它的第一个例句补上
+    if (headKey(f.head) === entryHead && !f.example && firstExample && firstExample.en) {
+      patch.example = firstExample.en;
+      patch.exampleCn = firstExample.cn || '';
+    }
+    if (!Object.keys(patch).length) return f;
+    changed = true;
+    return { ...f, ...patch };
+  });
+  return { list: changed ? next : src, changed };
 }
 
 /** 收藏的并集合并：按 id 去重，新收藏在前；entry 谁有就用谁的（两个都有取更新的 at 那份） */

@@ -105,6 +105,26 @@ describe('ReviewPane 复习卡', () => {
     expect(container.textContent).toContain('什么时候用哪个');
   });
 
+  it('收藏词缺「差别」时给出补齐入口，已有差别时不显示', () => {
+    const bare = {
+      key: 'f2', kind: 'favorite', head: 'grudge', phonetic: '/ɡrʌdʒ/',
+      favorite: { id: 'f2', head: 'grudge', brief: '吝惜', from: 'begrudge' },
+      schedule: { due: Date.now(), interval: 1 },
+    };
+    const props = { queue: [bare], index: 0, revealed: true, mix: { book: 0, fav: 1 } };
+    const { container, rerender } = render(<ReviewPane {...revProps({ ...props, onFillFavorite: () => {} })} />);
+    expect(container.querySelector('.fill-fav-btn')).toBeTruthy();
+    // 有差别 → 不需要补齐入口，直接显示差别
+    rerender(<ReviewPane {...revProps({ ...props, onFillFavorite: () => {} })} />);
+    const withDiff = {
+      ...bare,
+      favorite: { ...bare.favorite, diff: '与 begrudge 的差别：grudge 是名词', example: 'bear a grudge' },
+    };
+    rerender(<ReviewPane {...revProps({ queue: [withDiff], index: 0, revealed: true, mix: { book: 0, fav: 1 }, onFillFavorite: () => {} })} />);
+    expect(container.querySelector('.fill-fav-btn')).toBeNull();
+    expect(container.querySelector('.review-diff')).toBeTruthy();
+  });
+
   it('一轮走完：显示完成页与"用拼写再过一遍"', () => {
     render(<ReviewPane {...revProps({ index: 2 })} />);
     expect(document.querySelector('.review-done-line')).toBeTruthy();

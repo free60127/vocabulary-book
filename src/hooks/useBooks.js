@@ -15,7 +15,7 @@ import {
   addStudyDay, addWrong, buildReviewQueue, buildTodayQueue, buildWrongQueue, clearWrong, dayKey,
   headKey, scheduleOf, sm2Review, summarizeStreak, wrongList,
 } from '../review.js';
-import { addFavorite, attachEntryToFavorite, findFavorite, removeFavorite } from '../favorites.js';
+import { addFavorite, attachEntryToFavorite, backfillFavoritesFromEntry, findFavorite, removeFavorite } from '../favorites.js';
 import { TIP_LONG_MS, TIP_NORMAL_MS } from '../constants.js';
 
 /**
@@ -307,6 +307,19 @@ export function useBooks({ flash }) {
     return { added: true, head };
   }, [favorites, deletedFavorites, schedule, persistFavorites, persistDeletedFavorites, persistSchedule, flash]);
 
+  /**
+   * 用刚查到的词条回填收藏的辨析信息（差别 / 用法 / 例句）。
+   * 老收藏（2026-09-17 之前收的）没存过这些字段，靠"再看一眼源词"自动补齐。
+   */
+  /** 按词头取实时收藏对象（复习卡要用它，而不是队列里那份快照 —— 补齐后卡片要立刻变） */
+  const getFavorite = useCallback((head) => findFavorite(favorites, head), [favorites]);
+
+  const backfillFavorites = useCallback((entry) => {
+    const res = backfillFavoritesFromEntry(favorites, entry);
+    if (res.changed) persistFavorites(res.list);
+    return res.changed;
+  }, [favorites, persistFavorites]);
+
   const removeFavoriteById = useCallback((fav) => {
     persistFavorites(removeFavorite(favorites, fav.id));
     persistDeletedFavorites([...deletedFavorites, fav.id]);
@@ -453,7 +466,7 @@ export function useBooks({ flash }) {
     saveEntry, importEntries, newBook, deleteEntry, deleteBook, renameBook: renameBookById, mergeBooksInto,
     // 历史 / 收藏
     pushHistoryEntry, clearHistory, attachFavoriteEntry, isFavorite, favoriteOf,
-    toggleFavorite, removeFavoriteById,
+    toggleFavorite, removeFavoriteById, backfillFavorites, getFavorite,
     // 复习 / 斩掉
     gradeEntry, killWord, reviveWord,
     // 错词本（wrong 本身在上面「数据」一节已经导出）

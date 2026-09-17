@@ -1465,6 +1465,55 @@ async function runEdgeCases(browser) {
     await ctx.close();
   }
 
+  /* ②老收藏的辨析补齐：以前收藏的词没存过"差别/例句"，
+       卡片上要能自助补上（一次查词），补完卡片立刻更新 */
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await ctx.addInitScript(() => {
+      const now = Date.now();
+      // 模拟"上个版本收藏的词"：只有词头与来源，没有 diff/例句
+      localStorage.setItem('vb-favorites', JSON.stringify([
+        { id: 'fav-oppose', head: 'oppose', brief: '反对', from: 'object', at: now },
+      ]));
+      localStorage.setItem('vb-schedule', JSON.stringify({
+        'fav-oppose': { due: now - 1000, interval: 1, ease: 2.5, reps: 0, lapses: 0, lastAt: 0 },
+      }));
+    });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 90)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.locator('.due-btn').click();
+    await page.waitForSelector('.review-setup', { timeout: 8000 });
+    await page.locator('.review-setup .mode-card', { hasText: '复习模式' }).click();
+    await page.locator('.review-setup .primary-btn').click();
+    await page.waitForSelector('.review-word', { timeout: 8000 });
+    await page.locator('.review-word').click();
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => ({
+      diff: document.querySelectorAll('.review-diff').length,
+      fill: document.querySelectorAll('.fill-fav-btn').length,
+    }));
+    check(P, '老收藏缺差别时，卡片给出「补上差别和例句」入口', before.fill === 1 && before.diff === 0, JSON.stringify(before));
+    await page.locator('.fill-fav-btn').click();
+    await page.waitForTimeout(3500);
+    const after = await page.evaluate(() => {
+      const f = JSON.parse(localStorage.getItem('vb-favorites') || '[]')[0] || {};
+      return {
+        stored: { diff: Boolean(f.diff), usage: Boolean(f.usage), example: Boolean(f.example) },
+        diffOnCard: document.querySelectorAll('.review-diff').length,
+        fill: document.querySelectorAll('.fill-fav-btn').length,
+        example: (document.querySelector('.review-answer .example-line')?.innerText || '').replace(/\s+/g, ' ').slice(0, 40),
+      };
+    });
+    check(P, '补齐后：差别/用法/例句都写进了收藏', after.stored.diff && after.stored.usage && after.stored.example, JSON.stringify(after.stored));
+    check(P, '补齐后：卡片立刻显示差别（不是等下一轮）', after.diffOnCard === 1 && after.fill === 0, JSON.stringify(after).slice(0, 90));
+    check(P, '补齐后：复习卡上能看到例句', after.example.length > 6, after.example);
+    check(P, '补齐场景无未捕获异常', errs.length === 0, errs.join(' | '));
+    await ctx.close();
+  }
+
   /* ②拍照导入：识别 → 默认全选 → 取消一条 → 选本子 → 入库
        （用户要求的"拍照识别一键导入"；手写占位行与疑问标记也要有交代） */
   {
