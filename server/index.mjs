@@ -29,6 +29,7 @@ import { createJobStore, createJobSlots } from './jobs.mjs';
 import { createLlm } from './llm.mjs';
 import { createSegmentReader, finalizeStreamEntry, SEGMENT_LABEL } from './stream.mjs';
 import { OCR_PROMPT, parseOcrText, ocrQuality } from './ocr.mjs';
+import { auditQuizQuestions } from './quizQuality.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -449,7 +450,16 @@ async function runQuizJob(jobId, { points, count, level, baseUrl, model, apiKey 
     user: buildQuizMessage({ points, count, level }),
     maxTokens: 8000,
   });
-  job.data = sanitizeQuiz(parseJsonLoose(raw));
+  const parsedQuiz = sanitizeQuiz(parseJsonLoose(raw));
+  /**
+   * 出题后的**质量体检**（本地、不花钱）：把"题干里写着答案"这类白送题修掉或剔除。
+   * 起因：模型出过「Wearing a mask is ______.（用 mandatory 的适当形式填空）」答案是 mandatory ——
+   * 题干把答案告诉了学生、答案又是原词，做了等于没做。
+   * 提示词已经收紧，但模型不听话是常态，所以这里再加一道代码兜底，并**如实告诉用户剔了几道**。
+   */
+  const audit = auditQuizQuestions(parsedQuiz.questions);
+  job.data = { ...parsedQuiz, questions: audit.questions, repaired: audit.repaired, dropped: audit.dropped, notes: audit.notes };
+  if (audit.dropped) console.warn('[quiz] 剔除了 ' + audit.dropped + ' 道泄题/无效题');
   job.status = 'done';
   job.updatedAt = Date.now();
   saveJob(job);

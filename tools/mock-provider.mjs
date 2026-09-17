@@ -54,6 +54,10 @@ export const QUIZ = {
     { type: 'choice', stem: '选出最合适的一项：She ___ to the new rules.', options: ['objected', 'opposed', 'against', 'object'], answer: 'objected', explanation: 'object 作动词要接 to。' },
     { type: 'fill', stem: '填空：They ___ the plan openly.（公开反对）', options: [], answer: 'opposed', explanation: 'oppose 直接接宾语，更正式。' },
     { type: 'choice', stem: '哪句更得体？', options: ['I object to this.', 'I oppose to this.'], answer: 'I object to this.', explanation: 'oppose 不与 to 连用。' },
+    // 故意出的"白送题"：提示词就是答案（体检应修好它）
+    { type: 'fill', stem: '填空：They ___ the plan.（用 oppose 的适当形式填空）', options: [], answer: 'oppose', explanation: '应改成 opposed。' },
+    // 故意出的"题干泄题"：答案原样写在题干里（体检应剔除它）
+    { type: 'fill', stem: '填空：The scandal was a ___ in the campaign.', options: [], answer: 'scandal', explanation: '' },
   ],
 };
 

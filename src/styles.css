@@ -1410,3 +1410,4 @@ body, .editor, .sidebar, .modal, .sentence-input {
   .result-toolbar .primary-btn { width: 100%; justify-content: center; }
   .quiz-option.clickable { padding: 12px; }
 }
+.quiz-audit { color: var(--warn-fg); }

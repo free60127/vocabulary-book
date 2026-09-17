@@ -11,7 +11,7 @@
     "server": "node server/index.mjs",
     "build": "vite build",
     "start": "node server/index.mjs",
-    "test": "node server/jobstale.test.mjs && node server/resultShape.test.mjs && node server/dict.test.mjs && node server/budget.test.mjs && node server/kv.test.mjs && node server/job-evict.test.mjs && node test/history.test.mjs && node test/favorites.test.mjs && node test/account.test.mjs && node test/review.test.mjs && node test/stream.test.mjs && node test/ocr.test.mjs && node test/quizGrade.test.mjs && node test/wordbook.test.mjs && node test/filterSort.test.mjs && node test/no-secrets.test.mjs && vitest run --passWithNoTests",
+    "test": "node server/jobstale.test.mjs && node server/resultShape.test.mjs && node server/dict.test.mjs && node server/budget.test.mjs && node server/kv.test.mjs && node server/job-evict.test.mjs && node test/history.test.mjs && node test/favorites.test.mjs && node test/account.test.mjs && node test/review.test.mjs && node test/stream.test.mjs && node test/ocr.test.mjs && node test/quizGrade.test.mjs && node test/quizQuality.test.mjs && node test/wordbook.test.mjs && node test/filterSort.test.mjs && node test/no-secrets.test.mjs && vitest run --passWithNoTests",
     "lint": "eslint .",
     "test:ui": "vitest run",
     "test:e2e": "node tools/e2e-vocab.mjs",

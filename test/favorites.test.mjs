@@ -140,6 +140,28 @@ console.log('\n' + '='.repeat(62));
   check('无关卡片不会误改收藏', !r4.changed);
 }
 
+
+/* ---------- 补齐要**如实回报补了什么**（用户踩过："说补好了，界面啥也没变"） ---------- */
+{
+  // 有 from：来源词的卡片里写着差别
+  const withFrom = sanitizeFavorite({ head: 'ensconce', from: 'enshrine' });
+  const srcCard = { head: 'enshrine', synonyms: [{ word: 'ensconce', diff: '两者都表安放，ensconce 更舒适' }], examples: [] };
+  const r1 = backfillFavoritesFromEntry([withFrom], srcCard);
+  check('有来源词时补 diff，并如实回报字段名', r1.fields.includes('diff') && r1.list[0].diff.length > 0, JSON.stringify(r1.fields));
+
+  // 没有 from（老收藏常见）：用**收藏词自己**的近义词对比
+  const noFrom = sanitizeFavorite({ head: 'ensconce' });
+  const ownCard = { head: 'ensconce', synonyms: [{ word: 'enshrine', diff: 'ensconce 更强调安置在舒适处' }], examples: [{ en: 'She ensconced herself.', cn: '她安坐下来。' }] };
+  const r2 = backfillFavoritesFromEntry([noFrom], ownCard);
+  check('没有 from 时用"它与近义词的差别"补齐',
+    r2.fields.includes('ownDiff') && r2.list[0].ownDiffWord === 'enshrine' && r2.fields.includes('example'),
+    JSON.stringify(r2.fields));
+
+  // 卡片里本来就没有可补的 → 不能谎报成功
+  const r3 = backfillFavoritesFromEntry([sanitizeFavorite({ head: 'grudge' })], { head: 'grudge', synonyms: [], examples: [] });
+  check('没东西可补时 fields 为空、changed=false（不谎报）', r3.changed === false && r3.fields.length === 0, JSON.stringify(r3));
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

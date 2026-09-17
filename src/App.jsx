@@ -690,12 +690,21 @@ export default function App() {
    * 查过的词命中服务端缓存，等于免费。
    */
   const [fillBusy, setFillBusy] = useState(false)
+  /**
+   * 「补上差别和例句」：按需查**两张卡**。
+   *
+   * 第一张：`from`（当初从哪个词的卡片上收藏的）—— 那张卡里写着"这条收藏与它的差别"；
+   * 第二张：**收藏词自己** —— 老收藏常常没有 `from`，但自己的卡片里有近义词对比与例句。
+   *
+   * ⚠️ 说话要如实：只有**真的补到了 diff / ownDiff / example** 才算成功。
+   * （踩过：只看"有没有写东西"就报"已补上差别和例句"，实际补进去的是音标，用户看到界面没变化。）
+   */
   const fillFavorite = async (item) => {
     const fav = (item && item.favorite) || {}
-    const term = String(fav.from || fav.head || (item && item.head) || '').trim()
-    if (!term || fillBusy) return
+    const head = String(fav.head || (item && item.head) || '').trim()
+    if (!head || fillBusy) return
     setFillBusy(true)
-    try {
+    const runLookup = async (term) => {
       const out = await submitAndPoll({
         submit: () => lookup({ term, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
         fetchJob: getLookupJob,
@@ -704,13 +713,26 @@ export default function App() {
         timeoutError: '补齐超时了，稍后再试一次即可。',
         isAlive: () => aliveRef.current,
       })
-      if (out.aborted) return
-      const e = out.data && out.data.entry
-      if (!e) throw new Error('这次没有取到词条')
-      const changed = backfillFavorites(e)
-      flash(changed
-        ? `已补上「${fav.head}」的差别与例句`
-        : `「${term}」这张卡片里没有「${fav.head}」的辨析 —— 到收藏夹里点它自己查一次就能补例句`, TIP_LONG_MS)
+      if (out.aborted) return null
+      return (out.data && out.data.entry) || null
+    }
+    try {
+      const useful = (r) => (r && r.fields || []).some((f) => f === 'diff' || f === 'ownDiff' || f === 'example')
+      // 第一张：来源词
+      if (fav.from) {
+        const src = await runLookup(String(fav.from).trim())
+        if (src) {
+          const r = backfillFavorites(src)
+          if (useful(r)) { flash(`已补上「${head}」的差别与例句`, TIP_LONG_MS); return }
+        }
+      }
+      // 第二张：收藏词自己（补例句与"它与近义词的差别"）
+      const own = await runLookup(head)
+      if (own) {
+        const r = backfillFavorites(own)
+        if (useful(r)) { flash(`已补上「${head}」的差别与例句`, TIP_LONG_MS); return }
+      }
+      flash(`这张卡片里没有「${head}」可用的辨析信息 —— 可以到收藏夹里点它「查这个词」，看到卡片后再回来`, TIP_LONG_MS)
     } catch (err) {
       flash('补齐失败：' + ((err && err.message) || '请稍后再试'), TIP_LONG_MS)
     } finally {

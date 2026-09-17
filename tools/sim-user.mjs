@@ -1117,6 +1117,30 @@ async function runProfile(browser, p) {
       check(p.id, '自测题：批改后逐题给出判定与反馈', g.badges >= 1 && g.feedback >= 1, JSON.stringify(g));
       check(p.id, '自测题：批改后显示客观题得分', /客观题\s*\d+\s*\/\s*\d+/.test(g.score), g.score);
       check(p.id, '自测题：点过的选项保持选中状态', g.picked >= 1 || optCount === 0, JSON.stringify(g));
+      /* 两个真实反馈：① 白送题（题干里写着答案）要被修掉/剔除；② 未作答的题**不能**被揭晓答案 */
+      const auditNote = await page.evaluate(() => document.querySelector('.quiz-audit')?.innerText?.replace(/\s+/g, ' ').trim() || '');
+      check(p.id, '自测题：体检把"题干写着答案"的题修好或剔除，并如实说明',
+        /修好|剔除/.test(auditNote), auditNote || '(没有提示)');
+      const blanks = await page.evaluate(() => {
+        const items = [...document.querySelectorAll('.quiz-item')];
+        const blank = items.filter((it) => /未作答/.test(it.querySelector('.quiz-head')?.innerText || ''));
+        return {
+          blankCount: blank.length,
+          leaked: blank.filter((it) => /参考答案/.test(it.innerText)).length,
+        };
+      });
+      check(p.id, '自测题：只做了一部分时，未作答的题不会显示参考答案',
+        blanks.blankCount === 0 || blanks.leaked === 0, JSON.stringify(blanks));
+      const hideBtn = page.locator('.result-toolbar .ghost-btn', { hasText: /收起批改/ });
+      if (await hideBtn.count()) {
+        await hideBtn.click();
+        await page.waitForTimeout(250);
+        const hidden = await page.evaluate(() => document.querySelectorAll('.quiz-feedback').length);
+        check(p.id, '自测题：批改反馈可以收起（关得掉）', hidden === 0, `收起后反馈块 ${hidden} 个`);
+        await page.locator('.result-toolbar .ghost-btn', { hasText: /显示批改/ }).click();
+      } else {
+        check(p.id, '自测题：批改反馈可以收起（关得掉）', false, '没找到「收起批改」按钮');
+      }
       await auditShot('quiz-graded');
     }
 

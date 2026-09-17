@@ -1,5 +1,5 @@
-import React from 'react';
-import { Check, ClipboardCopy, Printer, RotateCcw, X, AlertCircle, Eraser, CheckCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, ClipboardCopy, Printer, RotateCcw, X, AlertCircle, Eraser, CheckCheck, Eye, EyeOff } from 'lucide-react';
 
 const TYPE_LABEL = { choice: '选择', fill: '填空', translate: '翻译', correct: '改错', usage: '用法判断' };
 
@@ -16,6 +16,16 @@ export default function QuizPane({
   quiz, showAnswers, busy, onToggleAnswers, onCopy, onRegenerate, onExit, onExportPdf,
   answers = {}, onAnswer, graded, grading, onGrade, onReset,
 }) {
+  /**
+   * 批改反馈是否显示。
+   *
+   * 用户反馈过两件事，这里各对应一条规则：
+   *  ① "我只做了部分题，点批改后**所有题**都显示答案" → **未作答的题不给参考答案与解析**
+   *     （没做过就揭晓，等于把剩下的题也毁了）；
+   *  ② "而且关不掉" → 给一个「收起批改」开关，随时能把反馈收起来（配合「显示答案」是两件事：
+   *     前者是批改结果，后者是整卷答案）。
+   */
+  const [showFeedback, setShowFeedback] = useState(true);
   const questions = (quiz && quiz.questions) || [];
   const resultOf = (i) => (graded ? (graded.results || []).find((r) => r.index === i) : null);
   const answeredCount = questions.filter((q, i) => {
@@ -35,6 +45,11 @@ export default function QuizPane({
             三处各写各的必然漏样式。现在都经过 printJob，一套 @media print 规则管住。 */}
         <button className="ghost-btn" onClick={() => (onExportPdf ? onExportPdf() : window.print())} disabled={!questions.length}><Printer size={15} />导出 PDF</button>
         <button className="ghost-btn" onClick={onRegenerate} disabled={busy}>{busy ? '出题中…' : '换一套'}</button>
+        {graded ? (
+          <button className="ghost-btn" onClick={() => setShowFeedback((v) => !v)}>
+            {showFeedback ? <EyeOff size={15} /> : <Eye size={15} />}{showFeedback ? '收起批改' : '显示批改'}
+          </button>
+        ) : null}
         {answeredCount ? (
           <button className="ghost-btn" onClick={onReset} disabled={grading}><Eraser size={15} />清空作答</button>
         ) : null}
@@ -60,6 +75,13 @@ export default function QuizPane({
             </p>
           ) : null}
           {grading ? <p className="muted small">{grading}</p> : null}
+          {quiz && (quiz.dropped || quiz.repaired) ? (
+            <p className="muted small quiz-audit">
+              {quiz.repaired ? `已修好 ${quiz.repaired} 道把答案写在提示里的题` : ''}
+              {quiz.repaired && quiz.dropped ? ' · ' : ''}
+              {quiz.dropped ? `剔除了 ${quiz.dropped} 道不合格的题（题干泄题或没答案）` : ''}
+            </p>
+          ) : null}
         </header>
 
         <ol className="quiz-list">
@@ -106,8 +128,9 @@ export default function QuizPane({
                     aria-label={'第 ' + (i + 1) + ' 题作答'} />
                 )}
 
-                {/* 批改后立刻给反馈：错在哪、正确答案是什么、模型怎么点评 */}
-                {r ? (
+                {/* 批改后立刻给反馈：错在哪、正确答案是什么、模型怎么点评。
+                    未作答的题**只标状态**，不揭晓答案（否则剩下的题也做不了了）。 */}
+                {r && showFeedback && r.status !== 'blank' ? (
                   <div className="quiz-feedback">
                     {r.status !== 'right' && r.expected ? (
                       <p className="muted small">参考答案：<b>{r.expected}</b></p>

@@ -35,13 +35,13 @@ function cardOf(item, favoriteOf) {
      *    → "与 {f.from} 的差别"
      * 以前只读第一种，于是"只收藏、还没收进单词本"的词翻面后只有一个孤立释义（用户反馈）。
      */
-    diff: f.diff || (e.synonyms && e.synonyms[0] && e.synonyms[0].diff) || '',
+    diff: f.diff || f.ownDiff || (e.synonyms && e.synonyms[0] && e.synonyms[0].diff) || '',
     synWord: f.diff
       ? (f.from || '')
-      : ((e.synonyms && e.synonyms[0] && e.synonyms[0].word) || ''),
+      : (f.ownDiff ? (f.ownDiffWord || '') : ((e.synonyms && e.synonyms[0] && e.synonyms[0].word) || '')),
     usage: f.usage || (e.synonyms && e.synonyms[0] && e.synonyms[0].usage) || '',
-    example: (e.examples && e.examples[0])
-      || (f.example ? { en: f.example, cn: f.exampleCn || '' } : null),
+    example: (f.example ? { en: f.example, cn: f.exampleCn || '' } : null)
+      || (e.examples && e.examples[0]) || null,
     fromFavorite: Boolean(item.favorite),
   };
 }

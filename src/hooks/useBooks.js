@@ -317,7 +317,9 @@ export function useBooks({ flash }) {
   const backfillFavorites = useCallback((entry) => {
     const res = backfillFavoritesFromEntry(favorites, entry);
     if (res.changed) persistFavorites(res.list);
-    return res.changed;
+    // 回**具体补了哪些字段**：调用方要靠它决定怎么跟用户说话
+    // （踩过：只看 changed 就报"已补上差别和例句"，其实补的是音标，界面上什么都没变）
+    return { changed: res.changed, fields: res.fields || [] };
   }, [favorites, persistFavorites]);
 
   const removeFavoriteById = useCallback((fav) => {

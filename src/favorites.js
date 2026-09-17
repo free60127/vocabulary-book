@@ -45,6 +45,13 @@ export function sanitizeFavorite(raw) {
      * 复习到这条收藏时就只剩一个孤立释义，用户最需要的"什么时候用哪个"反而没了。
      */
     diff: S(raw.diff, 600),
+    /**
+     * 「它自己的近义词对比」里那一条（`ownDiffWord` 是比的对象）。
+     * 与 `diff` 的区别：`diff` 说的是"本词相对收藏来源词"的差别（来自**别人**的卡片）；
+     * `ownDiff` 来自**本词自己的卡片** —— 很多老收藏没有 `from`，只能靠这一条。
+     */
+    ownDiff: S(raw.ownDiff, 600),
+    ownDiffWord: S(raw.ownDiffWord, 80),
     usage: S(raw.usage, 600),
     example: S(raw.example, 600),
     exampleCn: S(raw.exampleCn, 600),
@@ -107,11 +114,12 @@ export function attachEntryToFavorite(list, entry) {
  */
 export function backfillFavoritesFromEntry(list, entry) {
   const src = Array.isArray(list) ? list : [];
-  if (!entry || !entry.head) return { list: src, changed: false };
+  if (!entry || !entry.head) return { list: src, changed: false, fields: [] };
   const entryHead = headKey(entry.head);
   const syns = Array.isArray(entry.synonyms) ? entry.synonyms : [];
   const firstExample = Array.isArray(entry.examples) && entry.examples[0] ? entry.examples[0] : null;
   let changed = false;
+  const fields = new Set();
 
   const next = src.map((f) => {
     if (!f || !f.head) return f;
@@ -126,16 +134,25 @@ export function backfillFavoritesFromEntry(list, entry) {
         if (!f.phonetic && syn.phonetic) patch.phonetic = syn.phonetic;
       }
     }
-    // ② 看的就是收藏词自己 → 用它的第一个例句补上
-    if (headKey(f.head) === entryHead && !f.example && firstExample && firstExample.en) {
-      patch.example = firstExample.en;
-      patch.exampleCn = firstExample.cn || '';
+    // ② / ③ 看的就是收藏词自己：它自己的卡片里有例句与「近义词对比」
+    if (headKey(f.head) === entryHead) {
+      if (!f.example && firstExample && firstExample.en) {
+        patch.example = firstExample.en;
+        patch.exampleCn = firstExample.cn || '';
+      }
+      // 老收藏常常没有 from（不知道当初从哪收的），那就用它**自己的**近义词对比：
+      // "它与 X 的差别"同样是复习时最需要的一行
+      if (!f.diff && !f.ownDiff && syns.length && syns[0] && syns[0].diff) {
+        patch.ownDiff = syns[0].diff;
+        patch.ownDiffWord = syns[0].word || '';
+      }
     }
     if (!Object.keys(patch).length) return f;
     changed = true;
+    Object.keys(patch).forEach((k) => fields.add(k));
     return { ...f, ...patch };
   });
-  return { list: changed ? next : src, changed };
+  return { list: changed ? next : src, changed, fields: [...fields] };
 }
 
 /** 收藏的并集合并：按 id 去重，新收藏在前；entry 谁有就用谁的（两个都有取更新的 at 那份） */

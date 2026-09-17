@@ -147,6 +147,37 @@ describe('ReviewPane 复习卡', () => {
     expect(container.textContent).toContain('He placed the book on the table.');
   });
 
+  it('自测题：未作答的题不揭晓答案；批改反馈能收起', () => {
+    const quiz = {
+      title: '自测题', questions: [
+        { type: 'choice', stem: 'She ___ it.', options: ['a', 'b'], answer: 'a', explanation: '解析：选 a' },
+        { type: 'fill', stem: 'He ___ it.', options: [], answer: 'did', explanation: '解析：did' },
+      ],
+    };
+    const graded = {
+      results: [
+        { index: 0, status: 'right', expected: 'a' },
+        { index: 1, status: 'blank', expected: 'did' },
+      ],
+      objectiveRight: 1, objectiveTotal: 1,
+    };
+    const { container, rerender } = render(
+      <QuizPane quiz={quiz} showAnswers={false} answers={{ 0: { choice: 0 } }} graded={graded} />,
+    );
+    const items = [...container.querySelectorAll('.quiz-item')];
+    expect(items[0].textContent).toContain('解析：选 a');          // 作答过 → 有反馈
+    expect(items[1].textContent).not.toContain('参考答案');        // 未作答 → 不揭晓
+    expect(items[1].textContent).not.toContain('解析：did');
+    // 收起批改 → 反馈全部消失
+    const hide = [...container.querySelectorAll('button')].find((b) => /收起批改/.test(b.textContent));
+    expect(hide).toBeTruthy();
+    fireEvent.click(hide);
+    expect(container.querySelectorAll('.quiz-feedback').length).toBe(0);
+    // 恢复按钮出现
+    expect([...container.querySelectorAll('button')].some((b) => /显示批改/.test(b.textContent))).toBe(true);
+    rerender(<QuizPane quiz={quiz} showAnswers={false} answers={{ 0: { choice: 0 } }} graded={graded} />);
+  });
+
   it('收藏词缺「差别」时给出补齐入口，已有差别时不显示', () => {
     const bare = {
       key: 'f2', kind: 'favorite', head: 'grudge', phonetic: '/ɡrʌdʒ/',
