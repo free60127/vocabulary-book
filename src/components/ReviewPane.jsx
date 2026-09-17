@@ -20,9 +20,22 @@ function cardOf(item) {
     strength: e.strength || f.strength || '',
     meaning: (e.meanings && e.meanings[0] && e.meanings[0].cn) || e.brief || f.brief || item.brief || '',
     brief: e.brief || '',
-    diff: (e.synonyms && e.synonyms[0] && e.synonyms[0].diff) || '',
-    synWord: (e.synonyms && e.synonyms[0] && e.synonyms[0].word) || '',
-    example: (e.examples && e.examples[0]) || null,
+    /**
+     * 辨析信息（"什么时候用哪个"）—— 复习时最该看到的东西。
+     *
+     * 两种来源，方向不同，别搞混：
+     *  · 词条里的：`e.synonyms[i].diff` 讲的是**近义词相对本词**的差别 → "与 {近义词} 的差别"
+     *  · 收藏里的：`f.diff` 讲的是**本词相对主词**的差别（收藏 bespoke 时写的是"与 ad hoc 的差别"）
+     *    → "与 {f.from} 的差别"
+     * 以前只读第一种，于是"只收藏、还没收进单词本"的词翻面后只有一个孤立释义（用户反馈）。
+     */
+    diff: f.diff || (e.synonyms && e.synonyms[0] && e.synonyms[0].diff) || '',
+    synWord: f.diff
+      ? (f.from || '')
+      : ((e.synonyms && e.synonyms[0] && e.synonyms[0].word) || ''),
+    usage: f.usage || (e.synonyms && e.synonyms[0] && e.synonyms[0].usage) || '',
+    example: (e.examples && e.examples[0])
+      || (f.example ? { en: f.example, cn: f.exampleCn || '' } : null),
     fromFavorite: Boolean(item.favorite),
   };
 }
@@ -230,7 +243,12 @@ export default function ReviewPane({
             </div>
             <p><strong>{c.meaning}</strong></p>
             {c.brief ? <p className="muted">{c.brief}</p> : null}
-            {c.diff ? <p className="muted small">与 <b>{c.synWord}</b> 的差别：{c.diff}</p> : null}
+            {c.diff ? (
+              <p className="muted small review-diff">
+                与 <b>{c.synWord || '近义词'}</b> 的差别：{c.diff}
+              </p>
+            ) : null}
+            {c.usage ? <p className="muted small">什么时候用哪个：{c.usage}</p> : null}
             {c.example ? (
               <div className="example-line">
                 <em>{c.example.en}</em>

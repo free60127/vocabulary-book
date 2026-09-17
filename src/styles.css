@@ -1316,3 +1316,9 @@ body, .editor, .sidebar, .modal, .sentence-input {
 .stream-toggle { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13.5px; }
 .stream-toggle input { width: 16px; height: 16px; }
 @media (pointer: coarse) { .stream-toggle input { width: 20px; height: 20px; } }
+
+/* 复习卡上的辨析块：给一点底色，和"释义"区分开（这是最该记住的一行） */
+.review-diff {
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--info-bg); border-left: 3px solid var(--brand);
+}

@@ -88,6 +88,23 @@ describe('ReviewPane 复习卡', () => {
     expect(chips[0].className).toContain('active');
   });
 
+  it('收藏来的词：翻面后显示「与 X 的差别」与用法（翻面前不剧透）', () => {
+    const favItem = {
+      key: 'f1', kind: 'favorite', head: 'bespoke', phonetic: '/bɪˈspəʊk/',
+      favorite: { id: 'f1', head: 'bespoke', brief: '定制的', from: 'ad hoc', diff: '褒贬正好相反：bespoke 是褒义', usage: '正式写作' },
+      schedule: { due: Date.now(), interval: 1 },
+    };
+    const props = { queue: [favItem], index: 0, mix: { book: 0, fav: 1 } };
+    const { container, rerender } = render(<ReviewPane {...revProps(props)} />);
+    expect(container.querySelector('.review-diff')).toBeNull();          // 翻面前不给答案
+    rerender(<ReviewPane {...revProps({ ...props, revealed: true })} />);
+    const diff = container.querySelector('.review-diff');
+    expect(diff).toBeTruthy();
+    expect(diff.textContent).toContain('ad hoc');
+    expect(diff.textContent).toContain('褒贬正好相反');
+    expect(container.textContent).toContain('什么时候用哪个');
+  });
+
   it('一轮走完：显示完成页与"用拼写再过一遍"', () => {
     render(<ReviewPane {...revProps({ index: 2 })} />);
     expect(document.querySelector('.review-done-line')).toBeTruthy();

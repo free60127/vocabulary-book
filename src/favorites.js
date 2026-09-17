@@ -35,6 +35,17 @@ export function sanitizeFavorite(raw) {
     strength: S(raw.strength, 60),
     // 从哪个词条里收藏的 —— 回头能想起来"当时是在看 enshrine 时看到的"
     from: S(raw.from, 200),
+    /**
+     * 「它与主词的关键差别」等在收藏那一刻就拿得到的辨析信息。
+     *
+     * 为什么必须存下来：这些字段只存在于**别人那张卡片**里（收藏 bespoke 时，
+     * "bespoke 与 ad hoc 的差别"写在 ad hoc 的卡片上）。不存的话，
+     * 复习到这条收藏时就只剩一个孤立释义，用户最需要的"什么时候用哪个"反而没了。
+     */
+    diff: S(raw.diff, 600),
+    usage: S(raw.usage, 600),
+    example: S(raw.example, 600),
+    exampleCn: S(raw.exampleCn, 600),
     at: Number(raw.at) || Date.now(),
     // 查过之后把完整词条挂上来（加入词库时要用）
     entry: raw.entry && typeof raw.entry === 'object' ? raw.entry : undefined,

@@ -248,6 +248,11 @@ export function useBooks({ flash }) {
       tone: (syn && syn.tone) || '',
       strength: (syn && syn.strength) || '',
       from: (fromEntry && fromEntry.head) || '',
+      // 辨析信息一起存（它只存在于主词那张卡片上，不存就永久丢了）
+      diff: (syn && syn.diff) || '',
+      usage: (syn && syn.usage) || '',
+      example: (syn && syn.example) || '',
+      exampleCn: (syn && syn.exampleCn) || '',
     });
     persistFavorites(added);
     // 收藏的词**当天就进复习队列**（"回头细看"不能只是躺在侧栏里）

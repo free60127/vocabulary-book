@@ -721,6 +721,7 @@ async function runProfile(browser, p) {
     const mixText = await page.evaluate(() => document.querySelector('.queue-mix')?.textContent.replace(/\s+/g, ' ').trim() || '');
     check(p.id, '复习页显示队列构成（本子 N · 收藏 M）', /本子\s*\d+/.test(mixText) && /收藏\s*\d+/.test(mixText), mixText);
 
+
     /* 轮内换模式：明确的"从头开始"，不做半路变题（用户先后两次反馈合起来的结论） */
     {
       await page.locator('.mode-switch .mode-chip', { hasText: '拼写' }).click();
@@ -1450,6 +1451,51 @@ async function runEdgeCases(browser) {
     }));
     check(P, '跨过 00:00 不用刷新就翻篇（新的词进今日待复习）', /\(1\)/.test(after.due), `${after.due} · 页面时间 ${after.now}`);
     await page.screenshot({ path: path.join(SHOTS, 'midnight-rollover.png') }).catch(() => {});
+    await ctx.close();
+  }
+
+  /* ②收藏词的辨析：只收藏、没收进单词本的词，复习翻面后要能看到「与主词的差别」
+       （用户反馈："只点个收藏的那种词，复习时只剩一个孤立释义"） */
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 90)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.fill('.search-input', 'object');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /object/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
+    // 收藏它的**近义词**（不加入单词本 —— 这就是"只点个收藏"的路径）
+    await page.locator('.entry-card .syn-row button[aria-label="收藏"]').first().click();
+    await page.waitForTimeout(400);
+    const stored = await page.evaluate(() => {
+      const f = JSON.parse(localStorage.getItem('vb-favorites') || '[]')[0] || {};
+      return { head: f.head, from: f.from, diff: f.diff || '', usage: f.usage || '' };
+    });
+    check(P, '收藏时把「与主词的差别」和用法一起存下来了',
+      stored.diff.length > 0 && stored.from.length > 0, JSON.stringify(stored).slice(0, 80));
+
+    await page.locator('.due-btn').click();
+    await page.waitForSelector('.review-setup', { timeout: 8000 });
+    await page.locator('.review-setup .mode-card', { hasText: '复习模式' }).click();
+    await page.locator('.review-setup .primary-btn').click();
+    await page.waitForSelector('.review-word', { timeout: 8000 });
+    const beforeReveal = await page.evaluate(() => document.querySelectorAll('.review-diff').length);
+    check(P, '收藏词：翻面前不剧透差别', beforeReveal === 0, String(beforeReveal));
+    await page.locator('.review-word').click();
+    await page.waitForTimeout(300);
+    const shown = await page.evaluate(() => ({
+      head: document.querySelector('.review-word strong')?.textContent?.trim() || '',
+      diff: document.querySelector('.review-diff')?.innerText?.replace(/\s+/g, ' ').trim() || '',
+      hasUsage: /什么时候用哪个/.test(document.querySelector('.review-answer')?.innerText || ''),
+    }));
+    check(P, '收藏词：翻面后显示「与 X 的差别」',
+      shown.head.toLowerCase() === stored.head.toLowerCase() && shown.diff.includes(stored.from) && shown.diff.includes(stored.diff.slice(0, 6)),
+      JSON.stringify(shown).slice(0, 100));
+    check(P, '收藏词：同时给出"什么时候用哪个"', shown.hasUsage);
+    await page.screenshot({ path: path.join(SHOTS, 'favorite-diff.png') }).catch(() => {});
+    check(P, '收藏辨析场景无未捕获异常', errs.length === 0, errs.join(' | '));
     await ctx.close();
   }
 

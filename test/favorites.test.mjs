@@ -88,6 +88,22 @@ const SYN = { word: 'consecrate', phonetic: '/ˈkɒnsɪkreɪt/', cn: '使神圣�
 }
 
 console.log('\n' + '='.repeat(62));
+
+/* ---------- 辨析字段：收藏时就要存下来（复习卡要用） ---------- */
+{
+  const fav = sanitizeFavorite({
+    head: 'bespoke', brief: '定制的', from: 'ad hoc',
+    diff: '褒贬正好相反', usage: '正式写作', example: 'a bespoke suit', exampleCn: '定做的西装',
+  });
+  check('收藏保留「差别」与用法', fav.diff === '褒贬正好相反' && fav.usage === '正式写作', JSON.stringify(fav).slice(0, 60));
+  check('收藏保留例句与译文', fav.example === 'a bespoke suit' && fav.exampleCn === '定做的西装');
+  const merged = mergeFavorites([fav], [{ ...fav, brief: '更新的' }]);
+  check('同步合并后辨析字段不丢（合并函数会挑字段，漏了就永久丢）',
+    merged[0].diff === '褒贬正好相反' && merged[0].usage === '正式写作', JSON.stringify(merged[0]).slice(0, 60));
+  const added = addFavorite([], { head: 'whim', diff: '与 caprice 的差别：whim 更轻', from: 'caprice' });
+  check('新收藏走 addFavorite 也带上差别', added[0].diff.length > 0 && added[0].from === 'caprice');
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);
