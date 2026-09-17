@@ -55,7 +55,7 @@ export default function Sidebar({
               收藏夹（{favorites.length}）
               <button className="ghost-btn sm" onClick={onManageFavorites}>管理</button>
             </div>
-            <div className="lesson-list" style={{ maxHeight: 150 }}>
+            <div className="lesson-list scroll-capped" style={{ maxHeight: 150 }}>
               {favorites.slice(0, 20).map((f) => (
                 <button key={f.id} className="lesson-item" onClick={() => onOpenFavorite(f)}
                   title={f.entry ? '点一下看它的完整讲解' : '点一下自动查它'}>
@@ -71,7 +71,7 @@ export default function Sidebar({
         {history.length > 0 && (
           <>
             <div className="side-title">最近查过</div>
-            <div className="lesson-list" style={{ maxHeight: 170 }}>
+            <div className="lesson-list scroll-capped" style={{ maxHeight: 170 }}>
               {history.slice(0, 20).map((h) => (
                 <button key={h.id} className="lesson-item" onClick={() => onOpenHistory(h)}
                   title={h.entry ? '点一下回到上次查到的讲解' : '点一下重新查这个词（' + formatTime(h.at) + '）'}>

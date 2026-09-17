@@ -1245,3 +1245,40 @@ body, .editor, .sidebar, .modal, .sentence-input {
 .zh-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .zh-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px; }
 .zh-head .icon-btn { margin-left: auto; }
+
+/* ---------- 侧栏滚动条：隐藏掉 ----------
+   抽屉里有三块可滚区域（我的单词本 / 收藏夹 / 最近查过），各带一条滚动条叠在一起，
+   比内容本身还抢眼（用户反馈截图里三条灰条）。
+   滚动本身保留，只是不再画条：手机端这类"紧凑导航"通常都这么做。
+   桌面上留一条**细的、半透明的**当作"下面还有内容"的提示。 */
+.sidebar, .side-section, .lesson-list {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* 老 Edge */
+}
+.sidebar::-webkit-scrollbar,
+.side-section::-webkit-scrollbar,
+.lesson-list::-webkit-scrollbar { width: 0; height: 0; }
+
+@media (min-width: 901px) {
+  .side-section, .lesson-list { scrollbar-width: thin; }
+  .sidebar::-webkit-scrollbar,
+  .side-section::-webkit-scrollbar,
+  .lesson-list::-webkit-scrollbar { width: 6px; height: 6px; }
+  .sidebar::-webkit-scrollbar-thumb,
+  .side-section::-webkit-scrollbar-thumb,
+  .lesson-list::-webkit-scrollbar-thumb { background: rgba(120, 145, 165, .28); border-radius: 3px; }
+  .sidebar::-webkit-scrollbar-thumb:hover,
+  .side-section::-webkit-scrollbar-thumb:hover,
+  .lesson-list::-webkit-scrollbar-thumb:hover { background: rgba(120, 145, 165, .5); }
+  .sidebar::-webkit-scrollbar-track,
+  .side-section::-webkit-scrollbar-track,
+  .lesson-list::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* 底部一点渐隐：说明"下面还有"，代替被隐藏的滚动条。
+   只给**限高可滚**的那两块（收藏夹 / 最近查过）—— 单词本列表通常很短，
+   给它也加渐隐会平白把最后一行压暗。 */
+.side-section .lesson-list.scroll-capped:has(*:nth-child(4)) {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
+}

@@ -1395,6 +1395,41 @@ async function runEdgeCases(browser) {
     await ctx.close();
   }
 
+  /* ②侧栏滚动条：三块可滚区域各画一条灰条，比内容还抢眼（用户反馈截图） */
+  {
+    const ctx = await browser.newContext({ ...devices['Pixel 7'] });
+    await ctx.addInitScript(() => {
+      const now = Date.now();
+      localStorage.setItem('vb-books', JSON.stringify([{ id: 'b1', name: '英语文摘2026', note: '', createdAt: now, entries: [{ id: 'w1', head: 'good', brief: 'x', createdAt: now }] }]));
+      localStorage.setItem('vb-favorites', JSON.stringify(Array.from({ length: 63 }, (_, i) => ({ id: 'f' + i, head: 'fav' + i, brief: 'y', at: now - i * 1000 }))));
+      localStorage.setItem('vb-history', JSON.stringify(Array.from({ length: 12 }, (_, i) => ({ id: 'h' + i, head: 'hist' + i, at: now - i * 1000 }))));
+    });
+    const page = await ctx.newPage();
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.locator('.side-toggle').click();
+    await page.waitForTimeout(400);
+    const bars = await page.evaluate(() => {
+      const lists = [...document.querySelectorAll('.sidebar .lesson-list')];
+      return lists.map((node) => {
+        const cs = getComputedStyle(node);
+        return {
+          scrollbarWidth: cs.scrollbarWidth || '(默认)',
+          scrollable: node.scrollHeight > node.clientHeight + 1,
+          faded: (cs.maskImage || cs.webkitMaskImage || 'none') !== 'none',
+          capped: node.classList.contains('scroll-capped'),
+        };
+      });
+    });
+    check(P, '手机端侧栏不画滚动条（三块列表都隐藏）',
+      bars.length >= 2 && bars.every((b) => b.scrollbarWidth === 'none'), JSON.stringify(bars.map((b) => b.scrollbarWidth)));
+    check(P, '限高可滚的那两块带"下面还有"的渐隐提示',
+      bars.filter((b) => b.capped).length >= 1 && bars.filter((b) => b.faded).length >= 1,
+      JSON.stringify(bars.map((b) => ({ capped: b.capped, faded: b.faded }))));
+    await page.screenshot({ path: path.join(SHOTS, 'sidebar-scrollbars.png') }).catch(() => {});
+    await ctx.close();
+  }
+
   /* ②a Android 专项：iOS 上不需要、安卓上不做就会出问题的几条
         （字体放大 / 点按高亮 / 下拉刷新 / 地址栏高度 / 返回键 / 触摸滑动） */
   {
