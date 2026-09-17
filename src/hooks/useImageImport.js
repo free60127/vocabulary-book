@@ -54,6 +54,8 @@ export function useImageImport({ settings, aliveRef, books, onImport, flash }) {
   const [items, setItems] = useState([]);       // [{index, word, cn, doubt, checked}]
   const [bookId, setBookId] = useState('');
   const [newBookName, setNewBookName] = useState('');
+  /** 这次是哪个模型识别的、有没有回退/命中缓存（用户排查时一眼能说清） */
+  const [visionInfo, setVisionInfo] = useState(null);
   const lastFileRef = useRef(null);
 
   const reset = useCallback(() => {
@@ -94,6 +96,7 @@ export function useImageImport({ settings, aliveRef, books, onImport, flash }) {
       });
       if (out.aborted) return;
       const list = (out.data && out.data.items) || [];
+      setVisionInfo({ model: (out.data && out.data.model) || '', fellBack: Boolean(out.data && out.data.fellBack), cached: Boolean(out.cached) });
       if (!list.length) throw new Error('没有认出单词 —— 换个角度、让字更大更清楚，或者分两张拍');
       // 默认**全部勾选**（用户明确要求）；但"没认出来"的占位行（`?`）例外 ——
       // 勾了也导不进去，会让"我选了 6 个怎么只进来 5 个"变成困惑。
@@ -146,7 +149,7 @@ export function useImageImport({ settings, aliveRef, books, onImport, flash }) {
   const retry = useCallback(() => { if (lastFileRef.current) recognize(lastFileRef.current); }, [recognize]);
 
   return {
-    open, start, close, phase, progress, error, preview, items, bookId, setBookId, newBookName, setNewBookName,
+    open, start, close, phase, progress, error, preview, items, bookId, setBookId, newBookName, setNewBookName, visionInfo,
     recognize, toggle, setAll, edit, drop, checkedCount, doImport, retry,
   };
 }

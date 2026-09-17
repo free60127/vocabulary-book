@@ -278,7 +278,7 @@ export function createLlm({ allowServerKey = true } = {}) {
    * ⚠️ 模型必须是**支持视觉**的（如 deepseek-flash）。用普通文本模型会被接口拒绝 ——
    * 那种情况下我们给出可操作的提示（"把识别模型换成支持图片的"），而不是把英文报错甩给用户。
    */
-  async function callVision({ baseUrl, model, apiKey, prompt, imageDataUrl, maxTokens = 4000, timeoutMs = 180000 }) {
+  async function callVision({ baseUrl, model, apiKey, prompt, imageDataUrl, maxTokens = 6000, timeoutMs = 180000 }) {
     const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
@@ -297,23 +297,38 @@ export function createLlm({ allowServerKey = true } = {}) {
           },
         ],
         temperature: 0.1,
+        // 实测：这个模型会先输出一段 reasoning_content 再给正文，
+        // 额度给少了会出现"只有思考、content 为空"。整页 50 个词 ≈ 800 token 正文，
+        // 留足余量给思考过程（6000 对单页照片足够，也不至于失控）。
         max_tokens: maxTokens,
       },
     });
     const text = await r.text();
     if (!r.ok) {
       const low = text.toLowerCase();
-      if (r.status === 400 && (low.includes('image') || low.includes('modal') || low.includes('vision'))) {
-        throw new Error('当前模型不支持图片识别 —— 请在「AI 设置」里把「识别模型」填成支持视觉的模型（例如 deepseek-flash）');
+      // 模型/接口不认图片 —— 这是**配置问题**，要给可操作的提示，而不是甩英文报错
+      if ((r.status === 400 || r.status === 404) && (low.includes('image') || low.includes('modal') || low.includes('vision') || low.includes('not found'))) {
+        const err = new Error('这个模型不支持图片识别。DeepSeek 的 deepseek-flash 原生多模态，可以直接用它 —— 在「AI 设置 → 识别模型」里填 deepseek-flash（或让服务端配 AI_VISION_MODEL=deepseek-flash）。');
+        err.visionUnsupported = true;
+        throw err;
       }
       throw new Error('识别接口错误 ' + r.status + ': ' + text.slice(0, 300));
     }
     const data = JSON.parse(text);
     const choice = (data && data.choices && data.choices[0]) || {};
     const content = choice.message && choice.message.content;
-    if (!content) throw new Error('模型没有返回识别内容，请重试');
-    return content;
+    const finish = String(choice.finish_reason || '');
+    // 被截断：多半是整页太多词 + 思考过程吃掉了额度 —— 让用户分两张拍，比反复重试有用
+    if (!content && finish === 'length') {
+      throw new Error('识别结果被截断了（这张图里的词太多或思考过长）。建议分成两张拍，或只拍词表那一部分。');
+    }
+    // content 空但模型返回了 model 名 → 有些兼容接口把内容放在别处；给出实际模型名便于排查
+    if (!content) {
+      throw new Error('模型没有返回识别内容' + (data && data.model ? '（实际调用的是 ' + data.model + '）' : '') + '，请重试');
+    }
+    return { text: content, model: (data && data.model) || model, finishReason: finish };
   }
+
 
   return {
     // stat：模型/地址的取值口（路由里到处在用，保持原样暴露）

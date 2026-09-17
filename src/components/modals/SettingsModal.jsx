@@ -22,6 +22,15 @@ export default function SettingsModal({ settings, theme = 'system', onThemeChang
             {THEMES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
         </label>
+        <label>识别模型（拍照导入用）
+          <input value={form.visionModel || ''} onChange={field('visionModel')}
+            placeholder="留空即用服务端配置；DeepSeek 用 deepseek-flash（原生多模态）" />
+        </label>
+        <p className="muted small">
+          拍照/上传导入单词表要读图片，需要**支持视觉**的模型。DeepSeek 的 <b>deepseek-flash</b> 原生多模态，
+          直接填它即可；服务端也可以配 <code>AI_VISION_MODEL</code> 统一设置。留空则先用上面的模型试，
+          被接口拒绝时会自动回退到 deepseek-flash 再试一次。
+        </p>
         <label className="stream-toggle">
           <input type="checkbox" checked={form.streamLookup !== false}
             onChange={(e) => setForm((f) => ({ ...f, streamLookup: e.target.checked }))} />

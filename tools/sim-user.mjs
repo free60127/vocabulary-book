@@ -1543,6 +1543,11 @@ async function runEdgeCases(browser) {
     check(P, '拍照导入：识别出的词按序号列出，默认全部勾选',
       got.rows >= 5 && got.checked === got.rows - 1, JSON.stringify(got));
     check(P, '拍照导入：手写把握不大的词被标出（请核对）', got.doubt >= 1, `${got.doubt} 条带疑问标记`);
+    /* 识别模型：默认用配置里的模型；接口说"不认图片"时自动回退到多模态模型，
+       并且**在界面上说明用的是哪个** —— 出问题时用户能一眼说清是哪条路 */
+    const vinfo = await page.evaluate(() => document.querySelector('.import-model')?.innerText?.replace(/\s+/g, ' ') || '');
+    check(P, '拍照导入：界面说明实际使用的识别模型（含自动回退的说明）',
+      /识别模型/.test(vinfo) && /flash/.test(vinfo) && /自动改用/.test(vinfo), vinfo.slice(0, 80));
     check(P, '拍照导入：没认出来的占位行不默认勾选（勾了也导不进去）', got.placeholderChecked);
     await page.screenshot({ path: path.join(SHOTS, 'image-import-list.png') }).catch(() => {});
 

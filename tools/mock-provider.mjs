@@ -147,7 +147,12 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
           '6 | woof |',
           '7 | graved | 刻',
         ].join(String.fromCharCode(10));
-        return send(200, { choices: [{ message: { content: ocrText }, finish_reason: 'stop' }] });
+        // 模型名里没有 flash 就当作"不认图片"（模拟只支持文本的模型）→ 用来验证自动回退
+        const bodyModel = String(bodyObj?.model || 'mock');
+        if (!/flash/i.test(bodyModel)) {
+          return send(400, { error: { message: 'This model does not support image input' } });
+        }
+        return send(200, { model: bodyModel, choices: [{ message: { content: ocrText }, finish_reason: 'stop' }] });
       }
 
       /* 标记词要在**流式分支之前**处理：否则 __error__ / __garbage__ 会被流式截胡，

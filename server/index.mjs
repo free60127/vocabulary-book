@@ -146,6 +146,33 @@ const { saveJob, findJob, guardStale, safeRun } = store;   // 淘汰/失败落�
  *    词典里没有 → 保留疑问，前端高亮"请核对"；
  *  · 结果缓存按图片内容哈希：同一张图再传一次直接秒回（照片重传很常见）。
  */
+/**
+ * 识别调用的模型选择。
+ *
+ * 事实（2026-09-10 实测记录）：**DeepSeek 的 deepseek-flash 后端原生多模态**，
+ * 直接发 image_url 就能识图。所以默认**就用配置里的模型**（很可能已经是多模态的那一个），
+ * 只有接口明确回"不认图片"时，才回退到 deepseek-flash 再试一次 ——
+ * 这样用户不用为了这个功能去改任何配置；真回退了也会在结果里说明用的是哪个模型。
+ */
+async function callVisionWithFallback({ baseUrl, model, apiKey, image }) {
+  /** 回退用的模型：默认 deepseek-flash（原生多模态）；可用 OCR_FALLBACK_MODEL 覆盖（测试也用它注入） */
+  const fallbackModel = String(process.env.OCR_FALLBACK_MODEL || 'deepseek-flash');
+  try {
+    return await callVision({ baseUrl, model, apiKey, prompt: OCR_PROMPT, imageDataUrl: image });
+  } catch (e) {
+    // 只有"接口明确说不认图片"才回退；网络/额度/超时之类的错照原样抛，
+    // 别拿第二次请求把真正的问题掩盖过去
+    if (!(e && e.visionUnsupported) || model === fallbackModel) throw e;
+    console.warn('[ocr] 模型 ' + model + ' 不认图片，回退到 ' + fallbackModel + ' 重试');
+    try {
+      const r = await callVision({ baseUrl, model: fallbackModel, apiKey, prompt: OCR_PROMPT, imageDataUrl: image });
+      return { ...r, fellBack: true };
+    } catch {
+      throw e;      // 回退也失败 → 抛**最初那条可操作的提示**（它才说得清该怎么办）
+    }
+  }
+}
+
 async function runOcrJob(jobId, { image, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
@@ -166,7 +193,10 @@ async function runOcrJob(jobId, { image, baseUrl, model, apiKey }) {
   job.updatedAt = Date.now();
   saveJob(job);
 
-  const text = await callVision({ baseUrl, model, apiKey, prompt: OCR_PROMPT, imageDataUrl: image });
+  
+
+  const vision = await callVisionWithFallback({ baseUrl, model, apiKey, image });
+  const text = vision.text;
   let items = parseOcrText(text);
   if (!items.length) throw new Error('没有从这张图里认出单词 —— 换个角度、让字更大更清晰，或分两张拍');
 
@@ -181,7 +211,15 @@ async function runOcrJob(jobId, { image, baseUrl, model, apiKey }) {
     }
   }
 
-  const data = { items, quality: ocrQuality(items), raw: String(text).slice(0, 4000) };
+  const data = {
+    items,
+    quality: ocrQuality(items),
+    raw: String(text).slice(0, 4000),
+    // 用了哪个模型识别、是否发生过回退 —— 出问题时用户能一眼说清"是哪条路"
+    model: vision.model,
+    fellBack: Boolean(vision.fellBack),
+    finishReason: vision.finishReason || '',
+  };
   job.data = data;
   job.status = 'done';
   job.updatedAt = Date.now();

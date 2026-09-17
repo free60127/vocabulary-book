@@ -73,6 +73,13 @@ export default function ImageImportModal({ imp, books, onCreateBook, onClose }) 
         {/* ---------- ③ 核对清单 ---------- */}
         {imp.phase === 'review' ? (
           <div className="import-review">
+            {imp.visionInfo && imp.visionInfo.model ? (
+              <p className="muted small import-model">
+                识别模型：{imp.visionInfo.model}
+                {imp.visionInfo.fellBack ? '（当前模型不支持图片，已自动改用 deepseek-flash）' : ''}
+                {imp.visionInfo.cached ? ' · 命中上次结果（没重复计费）' : ''}
+              </p>
+            ) : null}
             <div className="import-bar">
               <span className="import-count">已选 <b>{imp.checkedCount}</b> / {imp.items.length}</span>
               <button className="link-btn" onClick={() => imp.setAll(true)}>全选</button>
