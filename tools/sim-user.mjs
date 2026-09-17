@@ -511,6 +511,15 @@ async function runProfile(browser, p) {
       heads.filter((h) => h === 'object').length === 1, heads.join(','));
 
     at('侧栏抽屉');
+    /* 滚动条：两侧可滚区域各画一条灰条太抢眼（用户截图反馈）——
+       现在两端都隐藏，靠底部渐隐提示"下面还有"。 */
+    {
+      const bars = await page.evaluate(() => [...document.querySelectorAll('.sidebar, .side-section, .lesson-list')]
+        .map((n) => getComputedStyle(n).scrollbarWidth));
+      check(p.id, '侧栏不画滚动条（抽屉/分区/列表都隐藏）',
+        bars.length > 0 && bars.every((v) => v === 'none'), bars.join('/'));
+    }
+
     /* ---------- 3. 侧栏（手机端是抽屉） ---------- */
     if (p.touch && (p.opts.viewport?.width ?? 0) <= 900) {
       await page.locator('.side-toggle').click();
