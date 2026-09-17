@@ -44,6 +44,14 @@ export const getStatus = () => api('/api/status', {}, TIMEOUT.fast);
 export const lookup = (payload) => api('/api/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
 export const getLookupJob = (jobId) => api('/api/lookup/' + jobId, {}, TIMEOUT.fast);
 
+/* ---------- 自测题批改（主观题交给模型） ---------- */
+const quizGradeCall = (payload) => api('/api/quiz/grade', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}),
+});
+export const quizGrade = Object.assign(quizGradeCall, {
+  job: (jobId) => api('/api/quizgrade/' + jobId, {}, TIMEOUT.fast),
+});
+
 /* ---------- 拍照识别单词表（图片较大，超时给宽一点） ---------- */
 export const ocrImport = (payload) => api('/api/ocr', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}),

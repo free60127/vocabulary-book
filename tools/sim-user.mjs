@@ -1092,6 +1092,34 @@ async function runProfile(browser, p) {
     const quiz = await auditShot('quiz');
     check(p.id, '试卷页没有横向溢出', quiz.docOverflowX <= 1 && quiz.out.length === 0, `${quiz.docOverflowX}px ${short(quiz.out)}`);
 
+    /* 作答 + 批改：选择题点选项、填空/主观题输入，然后一次批改 */
+    {
+      const qn = await page.locator('.quiz-item').count();
+      const opts = page.locator('.quiz-option.clickable');
+      const optCount = await opts.count();
+      check(p.id, '自测题：选择题的选项可以点', optCount >= 2, `${qn} 题 / ${optCount} 个可点选项`);
+      if (optCount) await opts.first().click();
+      const inputs = page.locator('.quiz-input');
+      const inputCount = await inputs.count();
+      for (let i = 0; i < inputCount; i += 1) await inputs.nth(i).fill('test answer');
+      await page.waitForTimeout(200);
+      const gradeBtn = page.locator('.result-toolbar .primary-btn', { hasText: /批改/ });
+      const label = (await gradeBtn.innerText()).replace(/\s+/g, ' ').trim();
+      check(p.id, '自测题：作答后「批改」按钮显示进度（N/总数）', /批改（\d+\/\d+）/.test(label), label);
+      await gradeBtn.click();
+      await page.waitForTimeout(3500);
+      const g = await page.evaluate(() => ({
+        badges: document.querySelectorAll('.quiz-badge').length,
+        feedback: document.querySelectorAll('.quiz-feedback').length,
+        score: document.querySelector('.quiz-score')?.innerText?.replace(/\s+/g, ' ').trim() || '',
+        picked: document.querySelectorAll('.quiz-option.picked').length,
+      }));
+      check(p.id, '自测题：批改后逐题给出判定与反馈', g.badges >= 1 && g.feedback >= 1, JSON.stringify(g));
+      check(p.id, '自测题：批改后显示客观题得分', /客观题\s*\d+\s*\/\s*\d+/.test(g.score), g.score);
+      check(p.id, '自测题：点过的选项保持选中状态', g.picked >= 1 || optCount === 0, JSON.stringify(g));
+      await auditShot('quiz-graded');
+    }
+
     at('登录弹窗与 ESC');
     /* ---------- 7. 弹窗：ESC 关闭 / 遮罩关闭 / 焦点 ---------- */
     await clickTopAction(/登录|@/);
@@ -1512,6 +1540,40 @@ async function runEdgeCases(browser) {
     check(P, '补齐后：复习卡上能看到例句', after.example.length > 6, after.example);
     check(P, '补齐场景无未捕获异常', errs.length === 0, errs.join(' | '));
     await ctx.close();
+  }
+
+  /* ②应用内相机：安卓 Chrome 常常忽略 input 的 capture 属性（直接弹照片选择器），
+       所以拍照走 getUserMedia 自建取景（用 Chrome 的假摄像头验证整条链路） */
+  {
+    const camBrowser = await chromium.launch({
+      args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+    });
+    const ctx = await camBrowser.newContext({ ...devices['Pixel 7'], permissions: ['camera'] });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 90)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.locator('.side-toggle').click();
+    await page.waitForTimeout(400);
+    await page.locator('.side-import').click();
+    await page.waitForSelector('.import-modal', { timeout: 8000 });
+    await page.locator('.import-actions .primary-btn').click();       // 「拍照」
+    const paneOk = await page.waitForSelector('.camera-pane', { timeout: 8000 }).then(() => true).catch(() => false);
+    check(P, '拍照按钮打开的是**应用内相机**（不是系统选择器）', paneOk);
+    if (paneOk) {
+      const live = await page.waitForFunction(() => {
+        const v = document.querySelector('.camera-video');
+        return v && v.videoWidth > 0;
+      }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+      check(P, '相机取景画面是活的（有视频流）', live);
+      await page.locator('.camera-actions .primary-btn').click();     // 「拍摄」
+      const gotRows = await page.waitForSelector('.import-row', { timeout: 60000 }).then(() => true).catch(() => false);
+      check(P, '拍完直接进入识别结果', gotRows);
+      check(P, '拍摄后相机已关闭（不占着摄像头）', (await page.locator('.camera-pane').count()) === 0);
+    }
+    check(P, '相机场景无未捕获异常', errs.length === 0, errs.join(' | '));
+    await camBrowser.close();
   }
 
   /* ②拍照导入：识别 → 默认全选 → 取消一条 → 选本子 → 入库

@@ -187,6 +187,40 @@ export function sanitizeEntry(raw) {
 const QUIZ_TYPES = ['choice', 'fill', 'translate', 'correct', 'usage'];
 
 /** 清洗自测题。题目缺题干或答案的直接丢（那种题没法做也没法判）。 */
+/**
+ * 批改结果收敛（主观题）。
+ *
+ * 耐造型：模型漏题、给重复 index、score 给出 "4/5" 这种、correct 写成字符串 ——
+ * 一律按位置对齐并夹到 0~5，缺的题标 `ungraded` 让前端如实显示，
+ * 而不是整卷报错（用户做了 20 题，不能因为第 3 题的格式问题就什么都看不到）。
+ */
+export function sanitizeQuizGrade(raw, expectedCount = 0) {
+  const src = isPlainObject(raw) ? raw : {};
+  const items = (Array.isArray(src.items) ? src.items : []).filter(isPlainObject);
+  const byIndex = new Map();
+  items.forEach((it, i) => {
+    const idx = Number.isFinite(Number(it.index)) ? Number(it.index) : i;
+    // 模型偶尔给 "4/5"、"4 分" 这类写法：取**第一个数字**，别把 "4/5" 拼成 45
+    const scoreMatch = String(it.score == null ? '' : it.score).match(/\d+(?:\.\d+)?/);
+    const scoreNum = scoreMatch ? Number(scoreMatch[0]) : NaN;
+    const score = Number.isFinite(scoreNum) ? Math.max(0, Math.min(5, Math.round(scoreNum))) : null;
+    if (byIndex.has(idx)) return;                 // 重复的按第一条算
+    byIndex.set(idx, {
+      index: idx,
+      score,
+      correct: it.correct === true || it.correct === 'true' || (score != null && score >= 4),
+      comment: boundedString(it.comment, 800).trim(),
+      better: boundedString(it.better, 600).trim(),
+    });
+  });
+  const out = [];
+  const total = Math.max(Number(expectedCount) || 0, byIndex.size);
+  for (let i = 0; i < total; i += 1) {
+    out.push(byIndex.get(i) || { index: i, score: null, correct: false, comment: '这题没有批改结果，可以单独再问一次', better: '' });
+  }
+  return { items: out, comment: boundedString(src.comment, 300).trim() };
+}
+
 export function sanitizeQuiz(raw) {
   const src = isPlainObject(raw) ? raw : {};
   const questions = (Array.isArray(src.questions) ? src.questions : [])

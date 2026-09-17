@@ -135,6 +135,20 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
         r.writeHead(code, { 'Content-Type': 'application/json' });
         r.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
       };
+      /* 自测题批改（主观题）：请求里带"请批改下面 N 道题" */
+      if (/请批改下面/.test(b) && !/【查询内容】/.test(b)) {
+        const n = (String(b).match(/请批改下面 (\d+) 道题/) || [])[1] || '1';
+        const count = Number(n) || 1;
+        const items = Array.from({ length: count }, (_, i) => ({
+          index: i,
+          score: 4,
+          correct: true,
+          comment: '意思对，注意冠词（第 ' + (i + 1) + ' 题）',
+          better: 'He placed the book on the table.',
+        }));
+        return send(200, { choices: [{ message: { content: JSON.stringify({ items, comment: '整体不错，注意冠词' }) }, finish_reason: 'stop' }] });
+      }
+
       /* 视觉（拍照识别）：请求体里有 image_url。返回一段**手写风格的识别结果**，
          故意包含：疑问标记（? / ??）、? 占位行、无释义行 —— 覆盖前端的核对与编辑路径。 */
       if (/"image_url"|"type":"image/.test(b) || Array.isArray(bodyObj?.messages?.[1]?.content)) {

@@ -16,6 +16,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import ReviewPane from '../../src/components/ReviewPane.jsx';
 import ReviewSetup from '../../src/components/ReviewSetup.jsx';
 import SentencePane from '../../src/components/SentencePane.jsx';
+import QuizPane from '../../src/components/QuizPane.jsx';
 import ZhCandidates from '../../src/components/ZhCandidates.jsx';
 import SafetyBanner from '../../src/components/SafetyBanner.jsx';
 import BackToTop from '../../src/components/BackToTop.jsx';
@@ -103,6 +104,47 @@ describe('ReviewPane 复习卡', () => {
     expect(diff.textContent).toContain('ad hoc');
     expect(diff.textContent).toContain('褒贬正好相反');
     expect(container.textContent).toContain('什么时候用哪个');
+  });
+
+  it('自测题：选项可点、未作答时禁用批改、批改后显示判定与反馈', () => {
+    const quiz = {
+      title: '自测题', questions: [
+        { type: 'choice', stem: 'She ___ to the rules.', options: ['objected', 'opposed', 'against', 'object'], answer: 'objected', explanation: 'object 作动词要接 to。' },
+        { type: 'translate', stem: '他把书放在桌上', options: [], answer: 'He put the book on the table.', explanation: '' },
+      ],
+    };
+    const onAnswer = vi.fn();
+    const onGrade = vi.fn();
+    const { container, rerender } = render(
+      <QuizPane quiz={quiz} showAnswers={false} answers={{}} onAnswer={onAnswer} onGrade={onGrade} graded={null} />,
+    );
+    // 选项可点
+    const opts = container.querySelectorAll('.quiz-option.clickable');
+    expect(opts.length).toBe(4);
+    fireEvent.click(opts[0]);
+    expect(onAnswer).toHaveBeenCalledWith(0, { choice: 0 });
+    // 没作答 → 批改按钮禁用
+    const gradeBtn = [...container.querySelectorAll('button')].find((b) => /批改/.test(b.textContent));
+    expect(gradeBtn.disabled).toBe(true);
+    // 作答后按钮可用且显示进度
+    rerender(<QuizPane quiz={quiz} showAnswers={false} answers={{ 0: { choice: 0 } }} onAnswer={onAnswer} onGrade={onGrade} graded={null} />);
+    const gradeBtn2 = [...container.querySelectorAll('button')].find((b) => /批改/.test(b.textContent));
+    expect(gradeBtn2.disabled).toBe(false);
+    expect(gradeBtn2.textContent).toContain('1/2');
+    // 批改结果：判定徽章 + 反馈
+    const graded = {
+      results: [
+        { index: 0, status: 'right', expected: 'objected' },
+        { index: 1, status: 'wrong', expected: 'He put the book on the table.', score: 3, comment: '注意冠词', better: 'He placed the book on the table.' },
+      ],
+      objectiveRight: 1, objectiveTotal: 1, comment: '整体不错',
+    };
+    rerender(<QuizPane quiz={quiz} showAnswers={false} answers={{ 0: { choice: 0 }, 1: { text: 'He put book on table.' } }} onAnswer={onAnswer} onGrade={onGrade} graded={graded} />);
+    expect(container.querySelectorAll('.quiz-badge.ok').length).toBe(1);
+    expect(container.querySelectorAll('.quiz-badge.bad').length).toBe(1);
+    expect(container.querySelector('.quiz-score').textContent).toContain('1');
+    expect(container.textContent).toContain('注意冠词');
+    expect(container.textContent).toContain('He placed the book on the table.');
   });
 
   it('收藏词缺「差别」时给出补齐入口，已有差别时不显示', () => {

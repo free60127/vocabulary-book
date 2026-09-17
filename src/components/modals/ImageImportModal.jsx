@@ -1,7 +1,8 @@
 import React, { useRef } from 'react';
-import { X, Camera, Image as ImageIcon, Check, AlertTriangle, Trash2, Upload } from 'lucide-react';
+import { X, Camera, Image as ImageIcon, Check, AlertTriangle, Trash2, Upload, SwitchCamera } from 'lucide-react';
 import { useFocusTrap } from '../../hooks/useFocusTrap.js';
 import { useEscape } from '../../hooks/useEscape.js';
+import { useCamera, dataUrlToFile } from '../../hooks/useCamera.js';
 
 /**
  * 拍照/上传 → 识别单词表 → 勾选 → 导入单词本。
@@ -17,7 +18,16 @@ import { useEscape } from '../../hooks/useEscape.js';
  */
 export default function ImageImportModal({ imp, books, onCreateBook, onClose }) {
   const trapRef = useFocusTrap();
-  useEscape(onClose);
+  /**
+   * 应用内相机。
+   *
+   * 原来「拍照」用的是 `<input capture="environment">`，但**安卓 Chrome 常常忽略它**、
+   * 直接弹系统照片选择器（用户实测："点拍照和从相册选一样"）。
+   * 现在改成自己开相机（getUserMedia + video + canvas 抓帧），两端行为一致；
+   * 实在不可用（不支持 / 没权限）时退回系统选择器 —— 不是死路。
+   */
+  const cam = useCamera();
+  useEscape(cam.open ? cam.close : onClose);
   const fileRef = useRef(null);
   const cameraRef = useRef(null);
 
@@ -43,8 +53,11 @@ export default function ImageImportModal({ imp, books, onCreateBook, onClose }) 
               <b>默认全部勾选</b>，你可以取消不要的、改掉认错的字，再选一个单词本导入。
             </p>
             <div className="import-actions">
-              {/* 手机：直接调后置摄像头；桌面：退化成普通选文件 */}
-              <button className="primary-btn" onClick={() => cameraRef.current && cameraRef.current.click()}>
+              {/* 手机：应用内相机（安卓/iOS 行为一致）；不支持或没权限时退回系统相机/选择器 */}
+              <button className="primary-btn" onClick={() => {
+                if (cam.canUse) cam.setOpen(true);
+                else if (cameraRef.current) cameraRef.current.click();
+              }}>
                 <Camera size={16} />拍照
               </button>
               <button className="ghost-btn" onClick={() => fileRef.current && fileRef.current.click()}>
@@ -59,6 +72,31 @@ export default function ImageImportModal({ imp, books, onCreateBook, onClose }) 
               <li>手写连笔多的话，可以离近一点分两张拍，识别更准</li>
               <li>同一张图再传一次会直接命中上次结果，不会重复花钱</li>
             </ul>
+          </div>
+        ) : null}
+
+        {/* ---------- ①b 取景 ---------- */}
+        {cam.open ? (
+          <div className="camera-pane">
+            <video ref={cam.videoRef} className="camera-video" playsInline muted autoPlay />
+            {cam.error ? <p className="import-error">{cam.error}</p> : null}
+            <div className="camera-actions">
+              <button className="ghost-btn" onClick={cam.close}><X size={15} />取消</button>
+              <button className="ghost-btn" onClick={() => cam.setFacing(cam.facing === 'environment' ? 'user' : 'environment')}
+                title="切换前后摄像头">
+                <SwitchCamera size={15} />换镜头
+              </button>
+              <button className="primary-btn" disabled={!cam.ready || Boolean(cam.error)}
+                onClick={() => {
+                  const shot = cam.capture();
+                  if (!shot) return;
+                  cam.close();
+                  imp.recognize(dataUrlToFile(shot));
+                }}>
+                <Camera size={16} />拍摄
+              </button>
+            </div>
+            <p className="muted small">让单词表占满画面、光线均匀，字迹清楚即可。</p>
           </div>
         ) : null}
 

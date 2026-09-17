@@ -16,8 +16,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
-import { buildLookupSystemPrompt, normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
-import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
+import { buildLookupSystemPrompt, normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, QUIZ_GRADE_PROMPT, buildQuizGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
+import { sanitizeQuizGrade, sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
 import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
@@ -134,6 +134,35 @@ const store = createJobStore({
 const { saveJob, findJob, guardStale, safeRun } = store;   // 淘汰/失败落盘仍只在 store 内部用
 
 /* ---------- 调用模型 ---------- */
+/* ---------- 自测题批改（只批主观题） ---------- */
+
+/**
+ * 批改主观题（翻译 / 改错）。
+ *
+ * 客观题（选择/填空）在浏览器端本地判 —— 秒出、免费、规则有单测；
+ * 这里只处理"没有唯一答案"的那几种，一次请求批完整卷。
+ */
+async function runQuizGradeJob(jobId, { items, level, baseUrl, model, apiKey }) {
+  const job = await findJob(jobId);
+  if (!job) return;
+  job.status = 'running';
+  job.updatedAt = Date.now();
+  saveJob(job);
+
+  const raw = await callLLM({
+    baseUrl, model, apiKey,
+    system: QUIZ_GRADE_PROMPT,
+    user: buildQuizGradeMessage({ items, level }),
+    maxTokens: 3000,
+  });
+  const parsed = parseJsonLoose(raw);
+  const data = sanitizeQuizGrade(parsed, items.length);
+  job.data = data;
+  job.status = 'done';
+  job.updatedAt = Date.now();
+  saveJob(job);
+}
+
 /* ---------- 拍照/截图识别单词表 ---------- */
 
 /**
@@ -764,6 +793,42 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, jobId, status: 'pending' });
     }
 
+    /* ---------- 自测题批改（主观题） ---------- */
+    if (p === '/api/quiz/grade' && req.method === 'POST') {
+      if (rateLimited(req)) return json(res, 429, { error: '请求过于频繁，请稍后再试' });
+      const body = await readBody(req, 256 * 1024);
+      const items = (Array.isArray(body.items) ? body.items : []).slice(0, 40).map((it) => ({
+        stem: String((it && it.stem) || '').slice(0, 2000),
+        type: String((it && it.type) || 'translate').slice(0, 20),
+        answer: String((it && it.answer) || '').slice(0, 1000),
+        userAnswer: String((it && it.userAnswer) || '').slice(0, 2000),
+      })).filter((it) => it.stem);
+      if (!items.length) return json(res, 400, { error: '没有需要批改的题目' });
+      const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
+      if (ep.error) return json(res, 400, { error: ep.error });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
+      const jobId = randomUUID();
+      saveJob({ jobId, kind: 'quizgrade', title: '批改自测题', status: 'pending', createdAt: Date.now(), data: null, error: null });
+      safeRun('quizgrade', jobId, () => runQuizGradeJob(jobId, {
+        items,
+        level: normalizeLevel(body.level),
+        baseUrl: ep.baseUrl,
+        model: String(body.model || '').trim() || stat.model(),
+        apiKey: ep.apiKey,
+      }));
+      return json(res, 200, { ok: true, jobId, status: 'pending' });
+    }
+
     /* ---------- 拍照识别单词表 ---------- */
     if (p === '/api/ocr' && req.method === 'POST') {
       if (rateLimited(req, 'ocr')) return json(res, 429, { error: '识别请求过于频繁，请稍后再试' });
@@ -973,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
       return undefined;
     }
 
-    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup|sentence|ocr)\/([A-Za-z0-9-]{8,64})$/);
+    const jobMatch = p.match(/^\/api\/(lookup|quiz|quizgrade|followup|sentence|ocr)\/([A-Za-z0-9-]{8,64})$/);
     if (jobMatch && req.method === 'GET') {
       const job = await findJob(jobMatch[2]);
       if (!job || job.kind !== jobMatch[1]) return json(res, 404, { error: '任务不存在或已过期，请重新发起' });

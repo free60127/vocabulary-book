@@ -46,6 +46,7 @@ import { useReviewSession } from './hooks/useReviewSession.js'
 import { usePrintJob } from './hooks/usePrintJob.js'
 import { useLookupStream } from './hooks/useLookupStream.js'
 import { useImageImport } from './hooks/useImageImport.js'
+import { useQuizGrade } from './hooks/useQuizGrade.js'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 import ReviewSetup from './components/ReviewSetup.jsx'
 
@@ -717,6 +718,16 @@ export default function App() {
     }
   }
 
+  /**
+   * 自测题的作答与批改。
+   * 客观题（选择/填空/用法）本地秒判；主观题（翻译/改错）一次请求交给模型逐题点评。
+   */
+  const quizGradeState = useQuizGrade({ settings, aliveRef, flash })
+  const gradeQuiz = async () => {
+    const res = await quizGradeState.grade(quiz && quiz.questions)
+    if (res && res.objectiveTotal != null) markStudied()
+  }
+
   /* ---------- 复习 ---------- */
   /**
    * 复习会话（模式、队列、评分、斩掉、错词练习）整个交给 hook。
@@ -752,6 +763,7 @@ export default function App() {
     const source = scope.length ? scope : entries
     if (!source.length) { flash('还没有词条可以出题 —— 先查几个词'); return }
     setQuizSetupOpen(false); setQuizBusy(true); setQuiz(null); setQuizShow(false); setView('quiz')
+    quizGradeState.reset()   // 换一套题 → 上一套的作答与批改结果必须清掉，否则答案会串
     try {
       // 每个词条压成一行给模型。**带上近义词的差别**是关键：只给同义词列表，
       // 模型只能出"这个词什么意思"这种浅题；带上差别才能出"哪个更正式"这类辨析题。
@@ -896,7 +908,10 @@ export default function App() {
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
             onExportPdf={() => print.start({ kind: 'quiz', quiz })}
-            onRegenerate={() => setQuizSetupOpen(true)} onExit={() => setView('search')} />
+            onRegenerate={() => setQuizSetupOpen(true)} onExit={() => setView('search')}
+            answers={quizGradeState.answers} onAnswer={quizGradeState.setAnswer}
+            graded={quizGradeState.graded} grading={quizGradeState.progress}
+            onGrade={gradeQuiz} onReset={quizGradeState.reset} />
         ) : view === 'book' && activeBook ? (
           <BookPane
             book={activeBook} entries={filteredBookEntries} total={activeBook.entries.length}

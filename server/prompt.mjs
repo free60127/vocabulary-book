@@ -155,6 +155,55 @@ export function buildLookupSystemPrompt({ stream = false } = {}) {
   return stream ? LOOKUP_SYSTEM_PROMPT + LOOKUP_STREAM_FORMAT_RULES : LOOKUP_SYSTEM_PROMPT;
 }
 
+/* ---------- 自测题批改（只批主观题：翻译、改错） ---------- */
+
+/**
+ * 为什么只批主观题：选择/填空有唯一答案，客户端本地判即可（秒出、免费、规则可测）；
+ * 翻译与改错没有唯一答案，才需要模型看"意思对不对、语法对不对、有没有更好的说法"。
+ *
+ * 要求模型**鼓励为主、点出可改之处**，并给一条"更地道的写法"——
+ * 用户做自测是为了进步，不是为了被判分。
+ */
+export const QUIZ_GRADE_PROMPT = `你是英语老师，正在批改学生的**主观题**（翻译 / 改错）。
+
+对每一题：
+1. 判断学生的作答**是否传达了参考答案的意思**（改错题还要看是否真的改对了错处）；
+2. 给一个 0~5 的整数分：5 = 完全正确且地道，4 = 意思对但有小瑕疵，3 = 基本对但明显不地道或漏了要点，
+   2 = 部分对，1 = 方向不对，0 = 完全错或空白；
+3. 用**一两句中文**点评：先肯定对的地方，再指出**最关键的一处**问题（不要罗列一堆）；
+4. 给一条**更地道的参考写法**（英文），如果学生写得已经很好，就给一个同义的高级表达。
+
+输出严格 JSON（不要 markdown 包装、不要额外解释）：
+{
+  "items": [
+    { "index": 0, "score": 5, "correct": true, "comment": "点评（中文，一两句）", "better": "更地道的英文写法" }
+  ],
+  "comment": "整卷主观题的一句话总评（中文，20 字内）"
+}
+
+注意：
+- items 的 index 与输入顺序一一对应（第一题是 0），不要漏题、不要加题；
+- 学生没作答的题（空字符串）给 0 分，comment 写"这题没作答"即可；
+- 评分**就低不就高**：明显机翻腔、时态错、搭配错都要扣分；但拼写小错不必扣到 3 分以下。`;
+
+export function buildQuizGradeMessage({ items, level = DEFAULT_LEVEL } = {}) {
+  const L = LEVEL_GUIDE[normalizeLevel(level)];
+  const list = Array.isArray(items) ? items : [];
+  const body = list.map((it, i) => {
+    const lines = [
+      '【第 ' + i + ' 题】' + (it.type === 'correct' ? '改错' : '翻译'),
+      '题目：' + String(it.stem || ''),
+      '参考答案：' + String(it.answer || ''),
+      '学生作答：' + (String(it.userAnswer || '').trim() || '（空）'),
+    ];
+    return lines.join(String.fromCharCode(10));
+  }).join(String.fromCharCode(10) + String.fromCharCode(10));
+  return '【学生水平】' + L.key + '（' + L.audience + '）'
+    + String.fromCharCode(10) + String.fromCharCode(10)
+    + '请批改下面 ' + list.length + ' 道题：'
+    + String.fromCharCode(10) + String.fromCharCode(10) + body;
+}
+
 /* ---------- 中文查词：先给候选词（用户挑一个再讲解） ---------- */
 /**
  * 中文输入不能直接当成"要讲的词"。
