@@ -15,7 +15,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { promises as dnsLookup } from 'node:dns';
 
 import { normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, LOOKUP_SYSTEM_PROMPT, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
 import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
@@ -25,9 +24,9 @@ import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client
 import { createAccounts } from './accounts.mjs';
 import { sendMail } from './mailer.mjs';
 import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, emptySnapshot, sanitizeSnapshot } from './sync.mjs';
-import { staleMsFor } from './job-stale.mjs';
 import { createBudget, budgetMessage } from './budget.mjs';
-import { createJobEvictor } from './job-evict.mjs';
+import { createJobStore, createJobSlots } from './jobs.mjs';
+import { createLlm } from './llm.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -56,105 +55,14 @@ const kvDurable = kv.kind !== 'file';
 const syncStore = createSyncStore(dataDir, { prefix: KV_PREFIX });
 const syncDurable = syncStore.kind !== 'file';
 
-/* ---------- API Key 归一化 ----------
- * 实测踩过：在部署平台粘贴 Key 时把界面上的"必填"标记一起带了进去（值成了 `sk-… 必`），
- * 表现不是"认证失败"，而是 fetch 直接抛 ByteString 错误，且 hasKey 仍显示 true。
- * Key 只可能是可打印 ASCII —— 非 ASCII 与空白一律去掉，改动过就告警一次（不静默）。 */
-function normalizeApiKey(raw) {
-  const s = String(raw == null ? '' : raw);
-  const cleaned = s.replace(/[^\x21-\x7E]/g, '');
-  return { key: cleaned, dirty: Boolean(s) && cleaned !== s };
-}
-const warnedKeys = new Set();
-const warnDirty = (name) => {
-  if (warnedKeys.has(name)) return;
-  warnedKeys.add(name);
-  console.warn('⚠️  ' + name + ' 里混进了非 ASCII 字符或空白（常见于粘贴时带上了平台界面的提示文字），已自动清理后使用，请到部署平台核对该项。');
-};
-const envKey = () => { const { key, dirty } = normalizeApiKey(process.env.AI_API_KEY); if (dirty) warnDirty('AI_API_KEY'); return key; };
-
-const stat = {
-  baseUrl: () => String(process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').trim(),
-  model: () => process.env.AI_MODEL || 'deepseek-chat',
-  visionBaseUrl: () => String(process.env.AI_VISION_BASE_URL || process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').trim(),
-  visionModel: () => process.env.AI_VISION_MODEL || '',
-  hasKey: () => Boolean(envKey()),
-};
-
-/* ---------- 接入点安全边界（照搬回译本：那里被 PoC 打过）----------
- * 1) 服务端 Key 只允许发往服务端自己配置的 baseUrl；
- * 2) 客户端要用自定义接口必须自带 Key；
- * 3) 自定义地址禁私网/环回/链路本地（含 IPv4 映射的 IPv6），并**解析域名**后再判一次。 */
+/* ---------- 模型调用层 ----------
+ * Key 归一化 / 接入点安全边界（防 SSRF）/ 发请求 都在 server/llm.mjs；
+ * 这里只持有它的实例，路由与任务照常调用。 */
 const ALLOW_SERVER_KEY = process.env.ALLOW_SERVER_KEY !== '0';
-const ALLOW_PRIVATE_BASE = process.env.ALLOW_PRIVATE_BASE_URL === '1';
-const sameEndpoint = (a, b) => String(a || '').replace(/\/+$/, '') === String(b || '').replace(/\/+$/, '');
-const looksLikeIp = (h) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':');
-
-function isPrivateIp4(ip) {
-  const p = ip.split('.').map(Number);
-  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  const [a, b] = p;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a >= 224) return true;
-  return false;
-}
-function isPrivateIp6(ip) {
-  if (ip === '::' || ip === '::1') return true;
-  if (/^f[cd]/.test(ip)) return true;
-  if (/^fe[89ab]/.test(ip)) return true;
-  if (ip.startsWith('ff')) return true;
-  return false;
-}
-function isPrivateIp(raw) {
-  const ip = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
-  if (!ip) return true;
-  const mapped = ip.match(/^::(?:ffff:)?(?:(\d{1,3}(?:\.\d{1,3}){3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
-  if (mapped) {
-    if (mapped[1]) return isPrivateIp4(mapped[1]);
-    const hi = parseInt(mapped[2], 16);
-    const lo = parseInt(mapped[3], 16);
-    return isPrivateIp4([(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255].join('.'));
-  }
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return isPrivateIp4(ip);
-  if (ip.includes(':')) return isPrivateIp6(ip);
-  return true;
-}
-const isPrivateName = (host) => {
-  const h = String(host || '').toLowerCase();
-  return !h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal');
-};
-async function isSafeBaseUrl(raw) {
-  let u;
-  try { u = new URL(raw); } catch { return false; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-  if (ALLOW_PRIVATE_BASE) return true;
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (isPrivateName(host)) return false;
-  if (looksLikeIp(host)) return !isPrivateIp(host);
-  try {
-    const addrs = await dnsLookup(host, { all: true });
-    return addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
-  } catch { return false; }
-}
-async function resolveEndpoint({ bodyBase, bodyKey, fallbackBase, fallbackKey }) {
-  const base = String(bodyBase || '').trim();
-  const key = normalizeApiKey(bodyKey).key;
-  // visitorKey = 这次用的是**访客自己带来的 Key**（而不是服务端那份）。
-  // 每日额度只算服务端 Key 的请求：别人花自己的钱，没理由被我们的预算卡住。
-  if (!base || sameEndpoint(base, fallbackBase)) {
-    const visitorKey = Boolean(key);
-    return { baseUrl: fallbackBase, apiKey: key || (ALLOW_SERVER_KEY ? fallbackKey : ''), visitorKey };
-  }
-  if (!(await isSafeBaseUrl(base))) {
-    return { error: '该 Base URL 不被允许（只接受公网可解析的 http/https 地址）。如需指向内网地址，请改在服务端 .env 里配置 AI_BASE_URL，或设 ALLOW_PRIVATE_BASE_URL=1' };
-  }
-  if (!key) return { error: '使用自定义 Base URL 时，必须同时填写该接口的 API Key（服务端密钥不会发往自定义地址）' };
-  return { baseUrl: base.replace(/\/+$/, ''), apiKey: key, visitorKey: true };
-}
+const llm = createLlm({ allowServerKey: ALLOW_SERVER_KEY });
+const { resolveEndpoint, parseJsonLoose, callLLM, envKey } = llm;
+/** 模型/地址的取值口：路由里到处在用（原来是同文件的 stat，现在转发给 llm 模块） */
+const stat = llm.stat;
 
 /* ---------- 限流（内存滑动窗口，按来源 IP；桶表有界）----------
  * ⚠️ X-Forwarded-For 是客户端可自写的：只信代理**追加在右端**的那部分，
@@ -208,180 +116,22 @@ function rateLimited(req, bucketKey = '', max = RATE_MAX) {
   return bucket.count > max;
 }
 
-/* ---------- 并发闸门 ----------
- * 限流（每分钟多少次）不是资源保护：它管不住"同时有多少个任务在跑"。 */
+/* ---------- 并发闸门与任务生命周期 ----------
+ * 两者都搬进了 server/jobs.mjs：那里能一眼读完"任务什么时候算死、什么时候被淘汰"。
+ * 限流（每分钟多少次）管不住"同时有多少个任务在跑"，这是两件事。 */
 const MAX_INFLIGHT_JOBS = Math.max(1, posInt(process.env.MAX_INFLIGHT_JOBS, 4));
 const MAX_QUEUED_JOBS = posInt(process.env.MAX_QUEUED_JOBS, 50);
-let inflightJobs = 0;
-const jobQueue = [];
-async function acquireJobSlot() {
-  if (inflightJobs < MAX_INFLIGHT_JOBS) { inflightJobs += 1; return true; }
-  if (jobQueue.length >= MAX_QUEUED_JOBS) return false;
-  await new Promise((resolve) => jobQueue.push(resolve));
-  return true;
-}
-function releaseJobSlot() {
-  const next = jobQueue.shift();
-  if (next) next();
-  else inflightJobs -= 1;
-}
-
-/* ---------- 任务生命周期 ---------- */
-const JOB_PREFIX = KV_PREFIX + 'job:';
-const JOB_TTL_DAYS = Number(process.env.JOB_TTL_DAYS || 30);
-const JOB_TTL_SEC = Math.max(60, Math.round(JOB_TTL_DAYS * 86400));
-const JOB_MAX_COUNT = Number(process.env.JOB_MAX_COUNT || 2000);
-/* 任务条数上限的**实际执行者**：以前 JOB_MAX_COUNT 只在 /api/status 里报了个数，
-   没有任何淘汰逻辑（键只靠 TTL 过期），等于把"上限 2000"写成了谎话 ——
-   而这个项目与回译本共用同一个 256MB 的 Upstash 库，谁塞满谁先遭殃。 */
-const jobEvictor = createJobEvictor({ kv, prefix: KV_PREFIX, max: JOB_MAX_COUNT, ttlSec: JOB_TTL_SEC });
-const jobs = new Map();
-const jobRenewedAt = new Map();
-const JOB_RENEW_MS = 24 * 60 * 60 * 1000;
-function scheduleForget(jobId) {
-  const t = setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000);
-  if (t.unref) t.unref();
-}
-function saveJob(job) {
-  jobs.set(job.jobId, job);
-  scheduleForget(job.jobId);
-  jobEvictor.track(job.jobId);      // 记账 + 超上限时淘汰最旧的（内部吞异常，不影响查词）
-  return Promise.resolve(kv.set(JOB_PREFIX + job.jobId, JSON.stringify(job), JOB_TTL_SEC)).catch(() => {});
-}
-function renewJobTtl(job) {
-  if (!job || !job.jobId) return;
-  if (jobRenewedAt.size > 5000) jobRenewedAt.clear();
-  const last = jobRenewedAt.get(job.jobId) || 0;
-  if (Date.now() - last < JOB_RENEW_MS) return;
-  jobRenewedAt.set(job.jobId, Date.now());
-  Promise.resolve(kv.set(JOB_PREFIX + job.jobId, JSON.stringify(job), JOB_TTL_SEC)).catch(() => {});
-}
-async function findJob(jobId) {
-  const mem = jobs.get(jobId);
-  if (mem) return mem;
-  try {
-    const raw = await kv.get(JOB_PREFIX + jobId);
-    if (!raw) return null;
-    const job = JSON.parse(raw);
-    if (job && job.jobId) {
-      jobs.set(jobId, job);
-      scheduleForget(jobId);
-      renewJobTtl(job);
-      return guardStale(job);
-    }
-  } catch (e) { console.error('读取任务失败:', e.message); }
-  return null;
-}
-function guardStale(job) {
-  if (!job || (job.status !== 'running' && job.status !== 'pending')) return job;
-  const ts = Number(job.updatedAt || job.createdAt || 0);
-  if (ts && Date.now() - ts > staleMsFor(job.kind)) {
-    job.status = 'error';
-    job.error = '这次任务超时没完成（常见原因：服务端重启，或模型接口长时间无响应）。请重新提交一次。';
-    job.updatedAt = Date.now();
-    saveJob(job);
-  }
-  return job;
-}
-function markJobFailed(jobId, e) {
-  const message = (e && e.message) || '未知错误';
-  const text = e && e.userFacing ? message : '服务端任务异常：' + message + '（请重试；若反复出现请把这句话发给开发者）';
-  const apply = (job) => {
-    if (!job) return;
-    job.status = 'error';
-    job.error = text;
-    job.updatedAt = Date.now();
-    saveJob(job);
-  };
-  const mem = jobs.get(jobId);
-  if (mem) { apply(mem); return undefined; }
-  return Promise.resolve().then(() => findJob(jobId)).then(apply).catch(() => {});
-}
-function safeRun(name, jobId, fn) {
-  return acquireJobSlot().then((got) => {
-    if (!got) {
-      const busy = new Error('服务器正忙（同时在跑的任务已达上限），请过一会儿再试 —— 这次没有调用模型，不产生费用。');
-      busy.userFacing = true;
-      return markJobFailed(jobId, busy);
-    }
-    return Promise.resolve().then(fn)
-      .catch((e) => {
-        console.error('[job] ' + name + ' 异常:', jobId, (e && e.stack) || e);
-        return markJobFailed(jobId, e);
-      })
-      .finally(releaseJobSlot);
-  });
-}
+const jobSlots = createJobSlots({ max: MAX_INFLIGHT_JOBS, maxQueued: MAX_QUEUED_JOBS });
+const store = createJobStore({
+  kv,
+  prefix: KV_PREFIX,
+  ttlSec: Math.max(60, Math.round(Number(process.env.JOB_TTL_DAYS || 30) * 86400)),
+  max: Number(process.env.JOB_MAX_COUNT || 2000),
+  slots: jobSlots,
+});
+const { saveJob, findJob, safeRun } = store;   // 其余（僵尸判定/淘汰/失败落盘）都在 store 内部用
 
 /* ---------- 调用模型 ---------- */
-async function postChat({ url, headers, body, withFormat, timeoutMs = 120000 }) {
-  let r;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    r = await fetch(url, {
-      method: 'POST', headers,
-      signal: controller.signal,
-      // 不跟随重定向：跟随等于把"已验证是公网"的目标换成响应头里指定的任意地址
-      redirect: 'manual',
-      body: JSON.stringify(withFormat ? Object.assign({}, body, { response_format: { type: 'json_object' } }) : body),
-    });
-  } catch (e) {
-    if (e?.name === 'AbortError') throw new Error('模型接口请求超时（' + Math.round(timeoutMs / 1000) + '秒），请稍后重试');
-    throw new Error('无法连接模型接口: ' + e.message);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (r.status >= 300 && r.status < 400) {
-    const loc = r.headers.get('location') || '(响应里没有 Location)';
-    throw new Error('模型接口返回了重定向（' + r.status + ' → ' + loc + '）。出于安全考虑不自动跟随，请把 Base URL 直接写成最终地址。');
-  }
-  return r;
-}
-function parseJsonLoose(text) {
-  const t = String(text || '').trim();
-  const fenced = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const body = fenced ? fenced[1].trim() : t;
-  try { return JSON.parse(body); } catch { /* 继续 */ }
-  const start = body.indexOf('{');
-  const end = body.lastIndexOf('}');
-  if (start >= 0 && end > start) return JSON.parse(body.slice(start, end + 1));
-  throw new Error('模型返回不是有效 JSON，请重试或换模型');
-}
-/**
- * 调一次模型。
- *
- * @param {boolean} [o.jsonMode] 是否要求模型返回 JSON。**查词/出题要，追问不要** ——
- *   追问的提示词明说"只输出回答正文，不要 JSON"，若同时又被 response_format 强制 JSON，
- *   两条指令打架，模型就可能回一个空壳（线上就是这么翻车的：追问报"模型没有给出回答"）。
- * @param {object} [o.meta] 诊断信息出口（finishReason / 内容长度），失败时能说清是"截断"还是"空"。
- */
-async function callLLM({ baseUrl, model, apiKey, system, user, maxTokens, jsonMode = true, meta }) {
-  const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
-  const r = await postChat({
-    url, headers, withFormat: jsonMode,
-    body: {
-      model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0.4, max_tokens: Number(maxTokens || process.env.AI_MAX_TOKENS || 8000),
-    },
-  });
-  const text = await r.text();
-  if (!r.ok) throw new Error('模型接口错误 ' + r.status + ': ' + text.slice(0, 500));
-  const data = JSON.parse(text);
-  const choice = (data && data.choices && data.choices[0]) || {};
-  const content = choice.message && choice.message.content;
-  if (meta) {
-    meta.finishReason = String(choice.finish_reason || '');
-    meta.length = typeof content === 'string' ? content.length : 0;
-    meta.reasoning = typeof (choice.message && choice.message.reasoning_content) === 'string'
-      ? choice.message.reasoning_content.length : 0;
-  }
-  if (!content) throw new Error('模型没有返回内容，请重试');
-  return content;
-}
-
 /* ---------- 查词任务（本产品的核心） ---------- */
 /**
  * 把词典事实并进 AI 词条，并在**客观事实上以词典为准**。
@@ -730,8 +480,8 @@ const server = http.createServer(async (req, res) => {
         sync: { store: syncStore.kind, durable: syncDurable, hosted: HOSTED },
         accounts: { enabled: accountsOn, durable: kvDurable },
         jobs: {
-          store: kv.kind, durable: kvDurable, ttlDays: JOB_TTL_DAYS,
-          max: JOB_MAX_COUNT, retained: jobs.size, evict: jobEvictor.stats,
+          store: kv.kind, durable: kvDurable,
+          ...store.stats(),
         },
         rateLimit: { perMin: RATE_MAX, trustProxyHops: TRUST_PROXY_HOPS, trustCfIp: TRUST_CF_IP, buckets: rateBuckets.size, bucketMax: RATE_BUCKET_MAX },
         budget: { dailyLimit: DAILY_JOB_LIMIT, usedToday: await budget.used() },

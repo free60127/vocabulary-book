@@ -42,6 +42,7 @@ import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
 import { useSentencePractice } from './hooks/useSentencePractice.js'
 import { useReviewSession } from './hooks/useReviewSession.js'
+import { usePrintJob } from './hooks/usePrintJob.js'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 import ReviewSetup from './components/ReviewSetup.jsx'
 
@@ -161,41 +162,14 @@ export default function App() {
   const doBindSync = useCallback((pw) => cloud.bindCode(account.token, pw), [cloud, account.token])
   const doPullSync = useCallback((pw) => cloud.pullCode(account.token, pw), [cloud, account.token])
 
-  /* ---------- 打印 / 导出 PDF ----------
-   * 统一的出口：词条、整本、自测题都走这里。屏幕上看不见的 .print-sheet 负责承载内容，
-   * 打印那一刻由 body.printing 把主界面藏起来（见 styles.css 的 @media print）。 */
-  const [printJob, setPrintJob] = useState(null)
-  /* 手机端多一步说明：Android/iOS 的 window.print() 直接弹系统打印界面，
-     而"存成文件"藏在右上角的菜单里（⋮ → 保存为 PDF）。 */
-  const [printHint, setPrintHint] = useState(null)
-  const startPrint = useCallback((job) => {
-    const coarse = typeof window !== 'undefined'
-      && ((window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || window.innerWidth <= 900)
-    if (coarse) setPrintHint(job)
-    else setPrintJob(job)
-  }, [])
-
-  useEffect(() => {
-    if (!printJob) return undefined
-    document.body.classList.add('printing')
-    // afterprint 在"取消"和"打印完成"后都会触发，用它收尾最稳；
-    // 再挂一个兜底定时器，防止某些环境不触发 afterprint 导致 body 永远停在 printing。
-    const cleanup = () => { document.body.classList.remove('printing'); setPrintJob(null) }
-    window.addEventListener('afterprint', cleanup)
-    const fire = setTimeout(() => window.print(), 80)
-    const safety = setTimeout(cleanup, 60_000)
-    return () => {
-      clearTimeout(fire); clearTimeout(safety)
-      window.removeEventListener('afterprint', cleanup)
-      document.body.classList.remove('printing')
-    }
-  }, [printJob])
+  /* 打印 / 导出 PDF：平台差异与收尾逻辑都在 hook 里 */
+  const print = usePrintJob()
 
   useEffect(() => () => { aliveRef.current = false }, [])
 
   /* 内联弹窗的 ESC 出口；设置、备份、账号、收藏夹在各自组件里 */
   useEscape(() => setQuizSetupOpen(false), quizSetupOpen)
-  useEscape(() => setPrintHint(null), Boolean(printHint))
+  useEscape(() => print.setHint(null), Boolean(print.hint))
   useEscape(() => setRenameTarget(null), Boolean(renameTarget))
   useEscape(() => setMergeTarget(null), Boolean(mergeTarget))
   useEscape(() => setKilledOpen(false), killedOpen)
@@ -255,7 +229,7 @@ export default function App() {
    * popstate 时按状态还原 —— 返回键的语义变成"回到上一个界面"，一路退到头才真的离开。 */
   const NAV_KEY = 'vbNav'
   const modalName = settingsOpen ? 'settings' : backupOpen ? 'backup' : authOpen ? 'auth'
-    : favOpen ? 'favorites' : quizSetupOpen ? 'quiz' : printHint ? 'printHint'
+    : favOpen ? 'favorites' : quizSetupOpen ? 'quiz' : print.hint ? 'printHint'
       : killedOpen ? 'killed' : wrongOpen ? 'wrong' : renameTarget ? 'rename' : mergeTarget ? 'merge' : ''
   const applyNavState = useCallback((st) => {
     if (!st) return
@@ -270,7 +244,8 @@ export default function App() {
     setQuizSetupOpen(st.modal === 'quiz')
     setKilledOpen(st.modal === 'killed')
     setWrongOpen(st.modal === 'wrong')
-    if (st.modal !== 'printHint') setPrintHint(null)
+    if (st.modal !== 'printHint') print.setHint(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- print.setHint 是稳定引用（useCallback 包装）
   }, [setAuthOpen])
   const navPushedRef = useRef(false)
   const navSkipPushRef = useRef(false)
@@ -809,7 +784,7 @@ export default function App() {
         ) : view === 'quiz' ? (
           <QuizPane quiz={quiz} showAnswers={quizShow} busy={quizBusy}
             onToggleAnswers={() => setQuizShow((v) => !v)} onCopy={copyQuiz}
-            onExportPdf={() => startPrint({ kind: 'quiz', quiz })}
+            onExportPdf={() => print.start({ kind: 'quiz', quiz })}
             onRegenerate={() => setQuizSetupOpen(true)} onExit={() => setView('search')} />
         ) : view === 'book' && activeBook ? (
           <BookPane
@@ -822,7 +797,7 @@ export default function App() {
             onOpenEntry={(e) => { setEntry(e); setView('search') }}
             onDeleteEntry={(e) => deleteEntry(activeBook.id, e)}
             onQuizForBook={() => { setQuizScope('book'); setQuizSetupOpen(true) }}
-            onExportPdf={() => startPrint({ kind: 'book', book: activeBook })}
+            onExportPdf={() => print.start({ kind: 'book', book: activeBook })}
             onRenameBook={() => setRenameTarget(activeBook)}
             onMergeBook={() => setMergeTarget(activeBook)}
             canMerge={books.length > 1} />
@@ -834,7 +809,7 @@ export default function App() {
             searchRef={searchRef}
             entry={entry} books={books}
             existing={entry ? (findEntryBook(books, entry.id) || findBookByHead(books, entry.head)) : null}
-            onExportPdf={(e) => startPrint({ kind: 'entry', entry: e })}
+            onExportPdf={(e) => print.start({ kind: 'entry', entry: e })}
             onToggleFavorite={toggleFavorite} isFavorite={isFavorite}
             onSave={saveToBook} onCreateBook={createAndSave} onLookupWord={runLookup}
             zhTerm={zhQuery} zhItems={zhCandidates}
@@ -913,9 +888,9 @@ export default function App() {
       ) : null}
     </div>
 
-      {printHint ? (
-        <PrintHintModal onCancel={() => setPrintHint(null)}
-          onContinue={() => { const j = printHint; setPrintHint(null); setPrintJob(j) }} />
+      {print.hint ? (
+        <PrintHintModal onCancel={() => print.setHint(null)}
+          onContinue={() => print.confirmHint()} />
       ) : null}
 
       {favOpen ? (
@@ -931,7 +906,7 @@ export default function App() {
       <BackToTop />
 
       {/* 打印页放在 .app 之外：body.printing 时把 .app 整个藏起来、只留它 */}
-      <PrintSheet job={printJob} />
+      <PrintSheet job={print.job} />
     </>
   )
 }
