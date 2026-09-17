@@ -9,7 +9,7 @@
  */
 
 const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-const boundedString = (v, max) => String(v == null ? '' : v).slice(0, max);
+export const boundedString = (v, max) => String(v == null ? '' : v).slice(0, max);
 const jsonBytes = (v) => {
   try { return JSON.stringify(v).length; } catch { return Infinity; }
 };

@@ -135,6 +135,21 @@ export async function startMockProvider({ aiPort, dictPort, delayMs = 0 } = {}) 
         r.writeHead(code, { 'Content-Type': 'application/json' });
         r.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
       };
+      /* 视觉（拍照识别）：请求体里有 image_url。返回一段**手写风格的识别结果**，
+         故意包含：疑问标记（? / ??）、? 占位行、无释义行 —— 覆盖前端的核对与编辑路径。 */
+      if (/"image_url"|"type":"image/.test(b) || Array.isArray(bodyObj?.messages?.[1]?.content)) {
+        const ocrText = [
+          '1 | aggregation | 聚集',
+          '2 | marsh | 沼泽',
+          '3 | vacillate? | 犹豫不决',
+          '4 | ? | 隐约的',
+          '5 | sacrilege?? | 亵渎',
+          '6 | woof |',
+          '7 | graved | 刻',
+        ].join(String.fromCharCode(10));
+        return send(200, { choices: [{ message: { content: ocrText }, finish_reason: 'stop' }] });
+      }
+
       /* 标记词要在**流式分支之前**处理：否则 __error__ / __garbage__ 会被流式截胡，
          "错误路径"这类用例就永远等不到错误提示（实测踩过） */
       if (term === '__error__') return send(500, { error: { message: 'mock upstream exploded' } });

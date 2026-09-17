@@ -193,7 +193,18 @@ async function runProfile(browser, p) {
   const logs = [];
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') logs.push(`${m.type()}: ${m.text()}`); });
   page.on('pageerror', (e) => logs.push('pageerror: ' + e.message + ' @ ' + String(e.stack || '').split(String.fromCharCode(10)).slice(1, 3).join(' ').slice(0, 220)));
-  page.on('requestfailed', (r) => logs.push(`requestfailed: ${r.url()} ${r.failure()?.errorText || ''}`));
+  page.on('requestfailed', (r) => {
+    const url = r.url();
+    const text = (r.failure() && r.failure().errorText) || '';
+    /**
+     * SSE 流式端点的 ERR_ABORTED 是**预期行为**，不算缺陷：
+     * 服务端发完 `done` 后前端主动 close()（不 close 的话 EventSource 会自动重连，
+     * 反而多打一次请求）。浏览器把这次主动关闭记成 ERR_ABORTED。
+     * 只豁免这一种组合（路径是 /stream 且错误就是 ERR_ABORTED），别的一律照报。
+     */
+    if (/\/api\/lookup\/[^/]+\/stream$/.test(url) && /ERR_ABORTED/.test(text)) return;
+    logs.push(`requestfailed: ${url} ${text}`);
+  });
   const prompts = [];
   page.on('dialog', (d) => d.accept(d.type() === 'prompt'
     ? (prompts.length ? prompts.shift() : d.defaultValue())
@@ -1451,6 +1462,65 @@ async function runEdgeCases(browser) {
     }));
     check(P, '跨过 00:00 不用刷新就翻篇（新的词进今日待复习）', /\(1\)/.test(after.due), `${after.due} · 页面时间 ${after.now}`);
     await page.screenshot({ path: path.join(SHOTS, 'midnight-rollover.png') }).catch(() => {});
+    await ctx.close();
+  }
+
+  /* ②拍照导入：识别 → 默认全选 → 取消一条 → 选本子 → 入库
+       （用户要求的"拍照识别一键导入"；手写占位行与疑问标记也要有交代） */
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    const errs = [];
+    page.on('pageerror', (e) => errs.push(String(e.message).slice(0, 90)));
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.status-chip');
+    await page.locator('.side-import').click();
+    await page.waitForSelector('.import-modal', { timeout: 8000 });
+    // 造一张最小的合法 PNG 当作"单词表照片"（mock 不真读图，只验证链路与界面）
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAAOklEQVR42u3OMQEAAAgDoJnc6BpjDyQgd2cLAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4NfAAAcHm1F8AAAAASUVORK5CYII=', 'base64');
+    const imgPath = path.join(SHOTS, 'fake-wordlist.png');
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.writeFileSync(imgPath, png);
+    await page.setInputFiles('.import-modal input[type=file]:not([capture])', imgPath);
+    await page.waitForSelector('.import-row', { timeout: 60000 });
+    const got = await page.evaluate(() => ({
+      rows: document.querySelectorAll('.import-row').length,
+      checked: document.querySelectorAll('.import-check input:checked').length,
+      doubt: document.querySelectorAll('.import-row.doubt').length,
+      placeholderChecked: [...document.querySelectorAll('.import-row')]
+        .filter((r) => r.querySelector('.import-word')?.value === '?')
+        .every((r) => !r.querySelector('input[type=checkbox]').checked),
+    }));
+    check(P, '拍照导入：识别出的词按序号列出，默认全部勾选',
+      got.rows >= 5 && got.checked === got.rows - 1, JSON.stringify(got));
+    check(P, '拍照导入：手写把握不大的词被标出（请核对）', got.doubt >= 1, `${got.doubt} 条带疑问标记`);
+    check(P, '拍照导入：没认出来的占位行不默认勾选（勾了也导不进去）', got.placeholderChecked);
+    await page.screenshot({ path: path.join(SHOTS, 'image-import-list.png') }).catch(() => {});
+
+    // 取消一条 → 计数跟着变
+    await page.locator('.import-row').first().locator('input[type=checkbox]').click();
+    await page.waitForTimeout(200);
+    const afterUncheck = await page.evaluate(() => document.querySelector('.import-count')?.innerText?.trim() || '');
+    check(P, '拍照导入：可以自己取消勾选，计数实时更新', /已选/.test(afterUncheck), afterUncheck);
+
+    // 建本子 → 导入
+    if (await page.locator('.import-newbook-name').count()) {
+      await page.fill('.import-newbook-name', '拍照导入');
+      await page.locator('.import-newbook .ghost-btn').click();
+      await page.waitForTimeout(500);
+    }
+    await page.locator('.import-foot .primary-btn').click();
+    await page.waitForTimeout(1200);
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').flatMap((b) => b.entries.map((e) => e.head)));
+    const imported = await page.evaluate(() => {
+      const b = JSON.parse(localStorage.getItem('vb-books') || '[]');
+      const book = b[0] || { entries: [] };
+      return { bookName: book.name, count: book.entries.length, first: book.entries[0] && { head: book.entries[0].head, brief: book.entries[0].brief } };
+    });
+    check(P, '拍照导入：勾选的词进了指定单词本（释义一起带上）',
+      imported.count >= 4 && imported.first && imported.first.brief && imported.first.brief.length > 0, JSON.stringify(imported).slice(0, 110));
+    check(P, '拍照导入：没认出来的占位行没有被写进本子', !stored.includes('?'), stored.join(','));
+    check(P, '拍照导入场景无未捕获异常', errs.length === 0, errs.join(' | '));
     await ctx.close();
   }
 

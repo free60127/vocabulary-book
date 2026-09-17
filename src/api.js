@@ -6,7 +6,11 @@
  */
 import { API_BASE as BASE } from './apiBase.js';
 
-const TIMEOUT = { fast: 15000, normal: 30000 };
+/**
+ * 请求超时。`upload` 给图片识别用：一页手写照片压完 200~400KB，
+ * 弱网上传 + 服务端转发给视觉模型，30 秒容易不够。
+ */
+const TIMEOUT = { fast: 15000, normal: 30000, upload: 120000 };
 
 async function api(path, opts = {}, timeoutMs = TIMEOUT.normal) {
   const controller = new AbortController();
@@ -39,6 +43,12 @@ export const getStatus = () => api('/api/status', {}, TIMEOUT.fast);
 /* ---------- 查词：提交 → 轮询 ---------- */
 export const lookup = (payload) => api('/api/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
 export const getLookupJob = (jobId) => api('/api/lookup/' + jobId, {}, TIMEOUT.fast);
+
+/* ---------- 拍照识别单词表（图片较大，超时给宽一点） ---------- */
+export const ocrImport = (payload) => api('/api/ocr', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}),
+}, TIMEOUT.upload);
+export const getOcrJob = (jobId) => api('/api/ocr/' + jobId, {}, TIMEOUT.fast);
 
 /* ---------- 自测题 ---------- */
 export const quiz = (payload) => api('/api/quiz', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });

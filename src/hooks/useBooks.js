@@ -155,6 +155,51 @@ export function useBooks({ flash }) {
     return { list, replaced, bookName: book ? book.name : '', entry };
   }, [books, schedule, persistBooks, persistSchedule]);
 
+  /**
+   * 批量导入（拍照识别的词）。
+   *
+   * 只建**轻量词条**：词头 + 中文释义，不调用模型讲解 ——
+   * 一页 30 个词要是逐个生成讲解，等于 30 次模型调用、用户要等半小时。
+   * 想细看时点那个词即可走正常查词流程（服务端会按词头合并，不会重复入库）。
+   *
+   * 去重分两层：本批次内部（识别可能重复）、与已有词条（`upsertEntry` 按词头判重）。
+   */
+  const importEntries = useCallback((bookId, items) => {
+    const list = Array.isArray(items) ? items : [];
+    let booksNext = books;
+    let scheduleNext = { ...schedule };
+    let added = 0;
+    let updated = 0;
+    const seen = new Set();
+    for (const raw of list) {
+      const head = String((raw && raw.head) || '').trim();
+      if (!head) continue;
+      const key = head.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entry = {
+        id: 'wb-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4),
+        head,
+        kind: 'word',
+        brief: String((raw && raw.brief) || '').trim(),
+        meanings: raw && raw.brief ? [{ pos: '', cn: String(raw.brief).trim(), en: '', note: '' }] : [],
+        importedFrom: 'image',
+        createdAt: Date.now(),
+      };
+      const res = upsertEntry(booksNext, bookId, entry);
+      booksNext = res.list;
+      if (res.replaced) updated += 1;
+      else {
+        added += 1;
+        scheduleNext = { ...scheduleNext, [entry.id]: scheduleOf(scheduleNext, entry.id, entry.createdAt) };
+      }
+    }
+    if (booksNext !== books) persistBooks(booksNext);
+    persistSchedule(scheduleNext);
+    const book = booksNext.find((b) => b.id === bookId);
+    return { added, updated, bookName: book ? book.name : '' };
+  }, [books, schedule, persistBooks, persistSchedule]);
+
   const newBook = useCallback((name) => {
     const list = createBook(books, name);
     persistBooks(list);
@@ -405,7 +450,7 @@ export function useBooks({ flash }) {
     persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory,
     persistDeletedBooks, persistDeletedEntries, persistDeletedFavorites, markStudied, applyMerged,
     // 词条 / 本子
-    saveEntry, newBook, deleteEntry, deleteBook, renameBook: renameBookById, mergeBooksInto,
+    saveEntry, importEntries, newBook, deleteEntry, deleteBook, renameBook: renameBookById, mergeBooksInto,
     // 历史 / 收藏
     pushHistoryEntry, clearHistory, attachFavoriteEntry, isFavorite, favoriteOf,
     toggleFavorite, removeFavoriteById,

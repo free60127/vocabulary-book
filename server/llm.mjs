@@ -268,12 +268,59 @@ export function createLlm({ allowServerKey = true } = {}) {
   }
 
 
+
+  /**
+   * 视觉调用：一张图片 + 一段提示词 → 文本。
+   *
+   * 与 callLLM 的区别只有消息体形态：user 的 content 是一个数组
+   * （`[{type:'text'}, {type:'image_url', image_url:{url:dataURI}}]`），这是 OpenAI 兼容接口的标准写法。
+   *
+   * ⚠️ 模型必须是**支持视觉**的（如 deepseek-flash）。用普通文本模型会被接口拒绝 ——
+   * 那种情况下我们给出可操作的提示（"把识别模型换成支持图片的"），而不是把英文报错甩给用户。
+   */
+  async function callVision({ baseUrl, model, apiKey, prompt, imageDataUrl, maxTokens = 4000, timeoutMs = 180000 }) {
+    const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const r = await postChat({
+      url, headers, withFormat: false, timeoutMs,
+      body: {
+        model,
+        messages: [
+          { role: 'system', content: '你是严谨的 OCR 助手：只输出要求格式的内容，不加任何解释。' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: imageDataUrl } },
+            ],
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: maxTokens,
+      },
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      const low = text.toLowerCase();
+      if (r.status === 400 && (low.includes('image') || low.includes('modal') || low.includes('vision'))) {
+        throw new Error('当前模型不支持图片识别 —— 请在「AI 设置」里把「识别模型」填成支持视觉的模型（例如 deepseek-flash）');
+      }
+      throw new Error('识别接口错误 ' + r.status + ': ' + text.slice(0, 300));
+    }
+    const data = JSON.parse(text);
+    const choice = (data && data.choices && data.choices[0]) || {};
+    const content = choice.message && choice.message.content;
+    if (!content) throw new Error('模型没有返回识别内容，请重试');
+    return content;
+  }
+
   return {
     // stat：模型/地址的取值口（路由里到处在用，保持原样暴露）
     stat,
     model: stat.model, baseUrl: stat.baseUrl, hasKey: stat.hasKey, envKey,
     normalizeApiKey, warnDirty, isSafeBaseUrl, resolveEndpoint,
-    postChat, parseJsonLoose, callLLM, callLLMStream,
+    postChat, parseJsonLoose, callLLM, callLLMStream, callVision,
     hasEnvKey: () => Boolean(envKey()), allowServerKey,
   };
 }

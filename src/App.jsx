@@ -38,12 +38,14 @@ import { MergeBookModal, NewBookModal, RenameBookModal } from './components/moda
 import KilledModal from './components/modals/KilledModal.jsx'
 import WrongBookModal from './components/modals/WrongBookModal.jsx'
 import SafetyBanner from './components/SafetyBanner.jsx'
+import ImageImportModal from './components/modals/ImageImportModal.jsx'
 import BackToTop from './components/BackToTop.jsx'
 import SentencePane from './components/SentencePane.jsx'
 import { useSentencePractice } from './hooks/useSentencePractice.js'
 import { useReviewSession } from './hooks/useReviewSession.js'
 import { usePrintJob } from './hooks/usePrintJob.js'
 import { useLookupStream } from './hooks/useLookupStream.js'
+import { useImageImport } from './hooks/useImageImport.js'
 import SentenceBookModal from './components/modals/SentenceBookModal.jsx'
 import ReviewSetup from './components/ReviewSetup.jsx'
 
@@ -76,7 +78,7 @@ export default function App() {
     books, schedule, history, favorites, local,
     entries, stats, streak, due, todayQueue, sentences, addSentence, deleteSentence,
     markStudied, applyMerged,
-    saveEntry, newBook, deleteEntry: dropEntry, deleteBook: dropBook, renameBook, mergeBooksInto,
+    saveEntry, importEntries, newBook, deleteEntry: dropEntry, deleteBook: dropBook, renameBook, mergeBooksInto,
     pushHistoryEntry, attachFavoriteEntry,
     isFavorite, toggleFavorite, removeFavoriteById,
     killed, revived, killWord, reviveWord, wrongItems, markWrong, clearWrongWord, wrongQueue,
@@ -145,6 +147,21 @@ export default function App() {
   const aliveRef = useRef(true)
   /** 流式查词：边生成边看（不可用时自动回退到下面的轮询链路） */
   const stream = useLookupStream({ aliveRef })
+  /**
+   * 拍照/上传导入单词表。
+   * 导入的是**轻量词条**（词头 + 中文释义）：一页 30 个词不能逐个调模型讲解，
+   * 想细看时点那个词即可（服务端按词头合并，不会重复入库）。
+   */
+  const imageImport = useImageImport({
+    settings, aliveRef, books,
+    onImport: (bookId, items) => {
+      const res = importEntries(bookId, items)
+      setActiveBookId(bookId); setView('book')
+      flash(`已导入 ${res.added} 个词到「${res.bookName}」${res.updated ? '（' + res.updated + ' 个已存在，已更新释义）' : ''}`, TIP_LONG_MS)
+      return res
+    },
+    flash,
+  })
 
   /* 造句练习：抽词口径与复习一致（本子 + 收藏，斩掉的排除） */
   const sentencePool = useMemo(
@@ -594,6 +611,22 @@ export default function App() {
    * 结果用户只是想建个本子，手里那张卡却被悄悄存了一份（实测：同一个词因此出现在两个本子里，
    * 复习排期也跟着裂成两份）。按钮名字说什么，就只做什么。
    */
+  /**
+   * 导入弹窗里的"内联建本"：直接用名字建，**不再弹第二个模态**。
+   * （踩过：那里调 createBookOnly 会弹出"新建单词本"对话框，模态叠模态，
+   *  用户以为没反应，测试也点不到。）
+   */
+  const createBookNamed = (name) => {
+    const clean = String(name || '').trim()
+    if (!clean) return null
+    const same = books.find((b) => b.name === clean)
+    if (same) return same
+    // newBook 返回 { list, id }：用 id 去新列表里取那本（books 是旧闭包，取不到刚建的那本）
+    const res = newBook(clean)
+    const created = (res && res.list ? res.list.find((b) => b.id === res.id) : null) || books.find((b) => b.name === clean)
+    return created || null
+  }
+
   const createBookOnly = async () => {
     const name = await askBookName()
     if (!name) return
@@ -759,6 +792,7 @@ export default function App() {
     onRenameBook: (b) => setRenameTarget(b),
     onMergeBook: (b) => setMergeTarget(b),
     onNewBook: createBookOnly,
+    onImportImages: () => { closeSidebarOnMobile(); imageImport.start() },
     favorites, onOpenFavorite: openFavorite, onManageFavorites: () => { closeSidebarOnMobile(); setFavOpen(true) },
     history,
     onOpenHistory: (h) => { closeSidebarOnMobile(); openHistory(h) },
@@ -860,6 +894,11 @@ export default function App() {
             followups={entry ? (followups[entry.id] || []) : []} onClearFollowups={clearFollowups} />
         )}
       </main>
+
+      {imageImport.open ? (
+        <ImageImportModal imp={imageImport} books={books}
+          onCreateBook={createBookNamed} onClose={imageImport.close} />
+      ) : null}
 
       {settingsOpen ? (
         <SettingsModal settings={settings} theme={theme} onThemeChange={setTheme}

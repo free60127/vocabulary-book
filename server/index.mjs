@@ -14,7 +14,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { buildLookupSystemPrompt, normalizeDifficulty, ZH_CANDIDATE_PROMPT, buildZhCandidateMessage, buildLookupMessage, QUIZ_PROMPT, buildQuizMessage, FOLLOWUP_SYSTEM_PROMPT, buildFollowupMessage, SENTENCE_MAKE_PROMPT, buildSentenceMakeMessage, SENTENCE_GRADE_PROMPT, buildSentenceGradeMessage, LEVEL_KEYS, DEFAULT_LEVEL, normalizeLevel } from './prompt.mjs';
 import { sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
@@ -28,6 +28,7 @@ import { createBudget, budgetMessage } from './budget.mjs';
 import { createJobStore, createJobSlots } from './jobs.mjs';
 import { createLlm } from './llm.mjs';
 import { createSegmentReader, finalizeStreamEntry, SEGMENT_LABEL } from './stream.mjs';
+import { OCR_PROMPT, parseOcrText, ocrQuality } from './ocr.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -61,7 +62,7 @@ const syncDurable = syncStore.kind !== 'file';
  * 这里只持有它的实例，路由与任务照常调用。 */
 const ALLOW_SERVER_KEY = process.env.ALLOW_SERVER_KEY !== '0';
 const llm = createLlm({ allowServerKey: ALLOW_SERVER_KEY });
-const { resolveEndpoint, parseJsonLoose, callLLM, callLLMStream, envKey } = llm;
+const { resolveEndpoint, parseJsonLoose, callLLM, callLLMStream, callVision, envKey } = llm;
 /** 模型/地址的取值口：路由里到处在用（原来是同文件的 stat，现在转发给 llm 模块） */
 const stat = llm.stat;
 
@@ -133,6 +134,61 @@ const store = createJobStore({
 const { saveJob, findJob, guardStale, safeRun } = store;   // 淘汰/失败落盘仍只在 store 内部用
 
 /* ---------- 调用模型 ---------- */
+/* ---------- 拍照/截图识别单词表 ---------- */
+
+/**
+ * 识别一张单词表照片 → 词条列表。
+ *
+ * 关键点：
+ *  · 视觉模型可以是**另一个模型**（`AI_VISION_MODEL`，如 deepseek-flash），
+ *    因为日常讲解用的模型未必支持图片；
+ *  · 识别完拿**词典**把标了疑问记号的词核一遍：词典里有 → 说明认对了，去掉疑问（少让用户操心）；
+ *    词典里没有 → 保留疑问，前端高亮"请核对"；
+ *  · 结果缓存按图片内容哈希：同一张图再传一次直接秒回（照片重传很常见）。
+ */
+async function runOcrJob(jobId, { image, baseUrl, model, apiKey }) {
+  const job = await findJob(jobId);
+  if (!job) return;
+  const hash = 'ocr:' + createHash('sha1').update(String(image)).digest('hex').slice(0, 24);
+  const cached = await kv.get(KV_PREFIX + hash).catch(() => null);
+  if (cached) {
+    try {
+      job.data = JSON.parse(cached);
+      job.status = 'done';
+      job.cached = true;
+      job.updatedAt = Date.now();
+      saveJob(job);
+      return;
+    } catch { /* 缓存坏了就当没有 */ }
+  }
+
+  job.status = 'running';
+  job.updatedAt = Date.now();
+  saveJob(job);
+
+  const text = await callVision({ baseUrl, model, apiKey, prompt: OCR_PROMPT, imageDataUrl: image });
+  let items = parseOcrText(text);
+  if (!items.length) throw new Error('没有从这张图里认出单词 —— 换个角度、让字更大更清晰，或分两张拍');
+
+  // 用词典核对"疑问项"：词典认识 = 认对了（去掉记号）；词典也不认识 = 很可能真的读错，留着让用户核对
+  if (DICT_PROVIDER !== 'off') {
+    const doubtful = items.filter((x) => x.doubt > 0 && x.word !== '?').slice(0, 12);
+    for (const it of doubtful) {
+      try {
+        const r = await lookupDict(it.word, { provider: DICT_PROVIDER, env: process.env });
+        if (r && r.ok) it.doubt = 0;
+      } catch { /* 词典不可用就保持原样 */ }
+    }
+  }
+
+  const data = { items, quality: ocrQuality(items), raw: String(text).slice(0, 4000) };
+  job.data = data;
+  job.status = 'done';
+  job.updatedAt = Date.now();
+  saveJob(job);
+  kv.set(KV_PREFIX + hash, JSON.stringify(data), 7 * 24 * 3600).catch(() => {});
+}
+
 /* ---------- 查词任务（本产品的核心） ---------- */
 /**
  * 把词典事实并进 AI 词条，并在**客观事实上以词典为准**。
@@ -413,7 +469,9 @@ async function runSentenceJob(jobId, { mode, points, count, head, brief, pos, cn
 
 /* ================= HTTP 层 ================= */
 const DIST = path.join(ROOT, 'dist');
-const MAX_BODY_BYTES = 2 * 1024 * 1024;   // 这个产品只传文本，2MB 足够
+const MAX_BODY_BYTES = 2 * 1024 * 1024;   // 普通接口只传文本，2MB 足够
+/** 拍照识别：图片 base64 会膨胀 4/3，6MB ≈ 4.5MB 原图；前端还会先压到长边 1600 */
+const OCR_MAX_BYTES = Number(process.env.OCR_MAX_BYTES || 6 * 1024 * 1024);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -574,6 +632,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         app: 'vocabulary-book',
         baseUrl: stat.baseUrl(), model: stat.model(), hasKey: stat.hasKey(),
+        // 识别（拍照导入）用哪个模型：没配 AI_VISION_MODEL 就退回讲解模型（可能不支持图片，前端会提示）
+        visionModel: stat.visionModel() || stat.model(),
+        visionIsDedicated: Boolean(stat.visionModel()),
         // 服务端有 Key ≠ 访客能用它：ALLOW_SERVER_KEY=0 的站点里，前端据此提示"请填自己的 Key"，
         // 否则会显示"AI 已配置"，用户一点查询却收到一句让他去改服务端 .env 的报错。
         serverKeyAllowed: ALLOW_SERVER_KEY,
@@ -661,6 +722,42 @@ const server = http.createServer(async (req, res) => {
         apiKey: ep.apiKey,
         // 流式：默认开（设置里可关；关了就回到"一次性 JSON"的老路）
         stream: body.stream !== false,
+      }));
+      return json(res, 200, { ok: true, jobId, status: 'pending' });
+    }
+
+    /* ---------- 拍照识别单词表 ---------- */
+    if (p === '/api/ocr' && req.method === 'POST') {
+      if (rateLimited(req, 'ocr')) return json(res, 429, { error: '识别请求过于频繁，请稍后再试' });
+      const body = await readBody(req, OCR_MAX_BYTES);
+      const image = String(body.image || '');
+      if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(image)) {
+        return json(res, 400, { error: '请上传 PNG / JPG / WebP 图片' });
+      }
+      if (image.length > OCR_MAX_BYTES - 1024) {
+        return json(res, 413, { error: '图片太大了，请在手机相册里先裁剪或压缩一下再上传' });
+      }
+      const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
+      if (ep.error) return json(res, 400, { error: ep.error });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
+      const jobId = randomUUID();
+      saveJob({ jobId, kind: 'ocr', title: '识别单词表', status: 'pending', createdAt: Date.now(), data: null, error: null });
+      safeRun('ocr', jobId, () => runOcrJob(jobId, {
+        image,
+        // 识别用**视觉模型**（可与讲解模型不同；日常讲解模型未必支持图片）
+        baseUrl: String(body.visionBaseUrl || '').trim() || stat.visionBaseUrl(),
+        model: String(body.visionModel || '').trim() || stat.visionModel() || stat.model(),
+        apiKey: ep.apiKey,
       }));
       return json(res, 200, { ok: true, jobId, status: 'pending' });
     }
@@ -838,11 +935,11 @@ const server = http.createServer(async (req, res) => {
       return undefined;
     }
 
-    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup|sentence)\/([A-Za-z0-9-]{8,64})$/);
+    const jobMatch = p.match(/^\/api\/(lookup|quiz|followup|sentence|ocr)\/([A-Za-z0-9-]{8,64})$/);
     if (jobMatch && req.method === 'GET') {
       const job = await findJob(jobMatch[2]);
       if (!job || job.kind !== jobMatch[1]) return json(res, 404, { error: '任务不存在或已过期，请重新发起' });
-      return json(res, 200, { ok: true, job: { jobId: job.jobId, status: job.status, data: job.data || null, error: job.error || null } });
+      return json(res, 200, { ok: true, job: { jobId: job.jobId, status: job.status, data: job.data || null, error: job.error || null, cached: Boolean(job.cached) } });
     }
 
     /* ---------- 云同步 ---------- */

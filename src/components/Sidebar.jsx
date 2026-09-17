@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cloud, FolderPlus, GitMerge, Pencil, Settings, Star, Trash2, X } from 'lucide-react';
+import { Camera, Cloud, FolderPlus, GitMerge, Pencil, Settings, Star, Trash2, X } from 'lucide-react';
 import { formatTime } from '../format.js';
 
 /**
@@ -11,7 +11,7 @@ import { formatTime } from '../format.js';
  * 手机上这几颗按钮**常显**（@media (hover:none)），桌面端悬停才显形但**始终占位**：
  * 原来用 display:none，悬停时行内突然插入按钮，手指底下会长出一个删除键。
  */
-export default function Sidebar({
+export default function Sidebar({ onImportImages, 
   open, onToggle, books, activeBookId, view, stats,
   onOpenBook, onDeleteBook, onRenameBook, onMergeBook, onNewBook,
   favorites, onOpenFavorite, onManageFavorites, history, onOpenHistory,
@@ -22,6 +22,10 @@ export default function Sidebar({
       <button className="sidebar-close" onClick={onToggle} aria-label="收起侧栏"><X size={18} /></button>
       <div className="brand"><div className="brand-mark">词</div><div><strong>单词本</strong><span>VOCABULARY BOOK</span></div></div>
       <button className="primary-btn" onClick={onNewBook}><FolderPlus size={16} />新建单词本</button>
+      {/* 拍照导入：手写单词表的主要入口（手机端最顺手，所以放在最上面第一屏） */}
+      <button className="ghost-btn side-import" onClick={onImportImages}>
+        <Camera size={16} />拍照 / 上传导入
+      </button>
 
       <div className="side-section">
         <div className="side-title">我的单词本（{stats.books}）</div>
