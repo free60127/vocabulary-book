@@ -60,6 +60,8 @@ const SHOTS_ONLY = argv.includes('--shots-only');
 const ONLY = argv.filter((a) => !a.startsWith('--'));
 
 /* ============================ 设备矩阵 ============================ */
+const mocksRef = { current: null };   // mock 提供者（在启动后才赋值，profile 内部通过它取用）
+
 const PROFILES = [
   { id: 'desktop', label: '桌面 1440×900', touch: false, opts: { viewport: { width: 1440, height: 900 } } },
   { id: 'laptop', label: '小笔记本 1280×720', touch: false, opts: { viewport: { width: 1280, height: 720 } } },
@@ -497,13 +499,28 @@ async function runProfile(browser, p) {
     }
 
     at('重复查词');
-    /* ---------- 2b. 同一个词再查一次：不能变成两条 ---------- */
+    /* ---------- 2b. 同一个词再查一次：不能变成两条；而且**不该再花一次钱** ---------- */
+    // 清空按钮（手机端挨个退格太难受）
+    await page.fill('.search-input', 'tumult');
+    await page.waitForTimeout(200);
+    const clearBtn = await page.locator('.input-clear').count();
+    check(p.id, '搜索框有一键清空按钮', clearBtn === 1);
+    if (clearBtn) {
+      await page.locator('.input-clear').click();
+      await page.waitForTimeout(200);
+      check(p.id, '点 × 清空全部字母（不用挨个退格）',
+        (await page.inputValue('.search-input')) === '', await page.inputValue('.search-input'));
+    }
+    const callsBefore = mocksRef.current.calls.ai;
     await page.fill('.search-input', 'object');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => /object/i.test(document.querySelector('.entry-card h1')?.textContent || ''), null, { timeout: 60000 });
     await page.waitForTimeout(250);
     check(p.id, '再查同一个词时卡片认出「已在单词本里」', (await page.locator('.saved-flag').count()) === 1,
       `标记 ${await page.locator('.saved-flag').count()} 个`);
+    // 服务端缓存：同一个词同一档位 24 小时内不再调用模型（省钱省时间）
+    check(p.id, '同一个词再查走服务端缓存（不再调用模型）', mocksRef.current.calls.ai === callsBefore,
+      `模型调用 ${callsBefore} → ${mocksRef.current.calls.ai}`);
     await saveViaBar(page);
     await page.waitForTimeout(400);
     const heads = await page.evaluate(() => JSON.parse(localStorage.getItem('vb-books') || '[]').flatMap((b) => b.entries.map((e) => e.head)));
@@ -1698,6 +1715,7 @@ async function runEdgeCases(browser) {
 
 /* ============================ 主流程 ============================ */
 const mocks = await startMockProvider({ aiPort: MOCK, dictPort: DICT_MOCK });
+mocksRef.current = mocks;
 const server = spawn(process.execPath, ['server/index.mjs'], {
   cwd: ROOT,
   env: {

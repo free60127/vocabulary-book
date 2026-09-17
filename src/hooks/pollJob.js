@@ -31,9 +31,18 @@ export async function pollJob({ jobId, fetchJob, intervalMs, timeoutMs, maxFailu
   const activeElapsed = () => Date.now() - startedAt - hiddenMs - (hiddenSince ? Date.now() - hiddenSince : 0);
 
   let failures = 0;
+  let polls = 0;
   try {
     while (activeElapsed() < timeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      /**
+       * 间隔前快后慢：任务通常要跑几十秒，但**完成的那一刻**只有靠下一次轮询才知道。
+       * 固定 1.5 秒意味着平均白等 0.75 秒（最坏 1.5 秒）——用户感知就是"明明好了还不出"。
+       * 前 12 次（约 6 秒）用 500ms 快速跟上，之后回到配置的间隔，省流量也不丢手感。
+       */
+      const warmup = Math.min(12, Math.ceil(6000 / Math.max(200, intervalMs)));
+      const waitMs = polls < warmup ? Math.max(300, Math.round(intervalMs / 3)) : intervalMs;
+      polls += 1;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
       if (isAlive && !isAlive()) return { aborted: true };
       let r;
       try {
@@ -48,7 +57,7 @@ export async function pollJob({ jobId, fetchJob, intervalMs, timeoutMs, maxFailu
       if (!job) continue;
       if (job.status === 'done') return { data: job.data };
       if (job.status === 'error') throw new Error(job.error || '任务失败，请重试');
-      if (onProgress) onProgress(job);
+      if (onProgress) onProgress({ ...(job || {}), elapsedMs: activeElapsed() });
     }
   } finally {
     if (canListen) document.removeEventListener('visibilitychange', onVisibility);

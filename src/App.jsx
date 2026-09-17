@@ -383,7 +383,13 @@ export default function App() {
         netError: '网络不稳定，暂时取不到结果，请重试',
         timeoutError: '等待超时。任务可能还在后台跑：稍后重新查一次即可；若反复失败请换个模型试试。',
         isAlive: () => aliveRef.current,
-        onProgress: () => setProgress('AI 正在讲解这个词…'),
+        onProgress: (info) => {
+          // 让等待"可预期"：显示已等秒数 + 说明可以切走（任务在服务端跑，回来还在）
+          const sec = Math.round((Number(info && info.elapsedMs) || 0) / 1000)
+          setProgress(sec >= 6
+            ? `AI 正在讲解这个词…已等 ${sec} 秒（通常 20~60 秒；可以先去做别的，回来结果还在）`
+            : 'AI 正在讲解这个词…')
+        },
       })
       if (out.aborted) return
       const e = out.data && out.data.entry

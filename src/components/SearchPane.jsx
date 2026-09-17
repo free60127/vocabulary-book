@@ -23,10 +23,23 @@ export default function SearchPane({
     <section className="editor">
       <div className="search-bar">
         <Search size={18} />
-        <input className="search-input" ref={searchRef} value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') onLookup(query); }}
-          placeholder="输入单词、短语或句型，回车生成讲解（如 object / pull off / no sooner ... than）· 中文也行（会先让你选对应的英文词）" />
+        {/* 输入框 + 一键清空：手机上挨个 delete 太难受（用户反馈，参照有道词典） */}
+        <span className="search-input-wrap">
+          <input className="search-input" ref={searchRef} value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onLookup(query);
+              // Esc 也清空：键盘用户不用去够那个 ×
+              if (e.key === 'Escape' && query) { e.stopPropagation(); setQuery(''); }
+            }}
+            placeholder="输入单词、短语或句型，回车生成讲解（如 object / pull off / no sooner ... than）· 中文也行（会先让你选对应的英文词）" />
+          {query ? (
+            <button className="icon-btn input-clear" type="button" aria-label="清空输入" title="清空"
+              onClick={() => { setQuery(''); if (searchRef.current) searchRef.current.focus(); }}>
+              <X size={14} />
+            </button>
+          ) : null}
+        </span>
         <select className="ocr-mode" value={level} onChange={(e) => setLevel(e.target.value)} title="讲解深度">
           {levels.map((l) => <option key={l} value={l}>{l}</option>)}
         </select>

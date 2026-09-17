@@ -181,15 +181,59 @@ async function runZhJob(jobId, { term, level, baseUrl, model, apiKey }) {
   saveJob(job);
 }
 
+/**
+ * 查词结果缓存。
+ *
+ * 为什么值得做：一次查词要跑几十秒（模型要把整张卡片写完），而"同一个词同一个档位"
+ * 的结果是**确定性的** —— 用户重复查、换设备打开历史、把收藏夹的词点回来，都不该再花一次钱和时间。
+ *
+ * 键里带上 level（不同档位的讲解深度不同）与 model（换模型后结果会变）。
+ * 命中就秒回，前端那条"提交 → 轮询"的链路一个字都不用改。
+ */
+const LOOKUP_CACHE_TTL_SEC = Number(process.env.LOOKUP_CACHE_TTL_SEC || 24 * 3600);
+const lookupCacheKey = (term, level, kindHint, model) => KV_PREFIX + 'lcache:'
+  + [String(term).toLowerCase(), level, kindHint || '', model || ''].join('|');
+
+async function readLookupCache(term, level, kindHint, model) {
+  if (!(LOOKUP_CACHE_TTL_SEC > 0)) return null;
+  try {
+    const raw = await kv.get(lookupCacheKey(term, level, kindHint, model));
+    if (!raw) return null;
+    const hit = JSON.parse(raw);
+    return hit && hit.entry ? hit : null;
+  } catch { return null; }
+}
+
+async function writeLookupCache(term, level, kindHint, model, data) {
+  if (!(LOOKUP_CACHE_TTL_SEC > 0)) return;
+  try { await kv.set(lookupCacheKey(term, level, kindHint, model), JSON.stringify(data), LOOKUP_CACHE_TTL_SEC); } catch { /* 缓存写失败不影响出结果 */ }
+}
+
 async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
+  // 缓存命中 → 秒回（同一词同一档位 24 小时内重复查不再花时间和费用）
+  const cached = await readLookupCache(term, level, kindHint, model);
+  if (cached) {
+    job.data = cached;
+    job.status = 'done';
+    job.updatedAt = Date.now();
+    job.cached = true;
+    saveJob(job);
+    return;
+  }
   job.status = 'running';
   job.updatedAt = Date.now();
   saveJob(job);
   // 先取词典事实：它是**客观事实的来源**（音标/词性/考试大纲标注），
   // 也是这次讲解"接地"的依据。取不到就静默降级为纯 AI —— 词典是加分项，不该拖垮查词。
-  const dictResult = await lookupDict(term, { provider: DICT_PROVIDER, env: process.env });
+  // 词典核对限时：它只提供音标/词性/大纲标注这类"加分事实"，接口抖一下不该拖住整张卡片。
+  // 超时就按纯 AI 出结果（词典模块自己也有缓存，命中时是毫秒级）。
+  const DICT_TIMEOUT_MS = Number(process.env.DICT_TIMEOUT_MS || 2500);
+  const dictResult = await Promise.race([
+    lookupDict(term, { provider: DICT_PROVIDER, env: process.env }),
+    new Promise((resolve) => setTimeout(() => resolve({ ok: false, reason: 'timeout' }), DICT_TIMEOUT_MS)),
+  ]);
   const raw = await callLLM({
     baseUrl, model, apiKey,
     system: LOOKUP_SYSTEM_PROMPT,
@@ -208,6 +252,7 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
   });
   if (!entry) throw new Error('模型返回的词条不完整（缺少释义），请重试');
   job.data = { entry: applyDict(entry, dictResult) };
+  writeLookupCache(term, level, kindHint, model, job.data);
   job.status = 'done';
   job.updatedAt = Date.now();
   saveJob(job);

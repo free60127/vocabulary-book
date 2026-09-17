@@ -1270,3 +1270,16 @@ body, .editor, .sidebar, .modal, .sentence-input {
   mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
 }
+
+/* ---------- 搜索框内的一键清空 ----------
+   手机上想把 "tumult" 删掉得按六次退格（用户反馈）；这里放一个 ×，
+   位置贴在输入框右内侧（图标不挤占输入宽度）。 */
+.search-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.search-input-wrap .search-input { width: 100%; padding-right: 34px; }
+.input-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--fill); color: var(--muted); border: 1px solid transparent;
+}
+.input-clear:hover { color: var(--text); border-color: var(--line); }
+@media (pointer: coarse) { .input-clear { width: 34px; height: 34px; right: 2px; } }
