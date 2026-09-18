@@ -95,14 +95,30 @@ export default function ReviewPane({
     return () => document.removeEventListener('keydown', onKey);
   }, [revealed, spelling, onExit, onReveal, onGrade]);
 
+  /* 滑动跟手反馈：拖动时卡片跟着手指平移（半速、最多 64px），过了评分阈值显示
+     "松手：忘了/简单" 角标 —— 之前滑动手势没有任何过程反馈，松手前用户不知道
+     会不会触发、会评成哪档（夜间巡检遗留清单 #1）。 */
+  const [swipe, setSwipe] = useState(null);   // { dx: 跟手位移, dir: 'easy'|'forgot'|null } | null
+  const resetSwipe = () => { touchStart.current = null; setSwipe(null); };
   const onTouchStart = (e) => {
     const t = e.touches && e.touches[0];
     if (t) touchStart.current = { x: t.clientX, y: t.clientY };
   };
+  const onTouchMove = (e) => {
+    const start = touchStart.current;
+    const t = e.touches && e.touches[0];
+    if (!start || !t || spelling || !revealed) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.5) { setSwipe(null); return; }
+    const damped = Math.sign(dx) * Math.min(Math.abs(dx) / 2, 64);
+    const dir = Math.abs(dx) >= 60 ? (dx > 0 ? 'easy' : 'forgot') : null;
+    setSwipe({ dx: damped, dir });
+  };
   const onTouchEnd = (e) => {
     const start = touchStart.current;
-    touchStart.current = null;
-    if (!start || spelling || !revealed) return;   // 拼写阶段左右滑动会把刚打的字滑没
+    resetSwipe();
+    if (!start || spelling || !revealed) return;
     const t = e.changedTouches && e.changedTouches[0];
     if (!t) return;
     const dx = t.clientX - start.x;
@@ -110,6 +126,9 @@ export default function ReviewPane({
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
     onGrade(dx > 0 ? 'easy' : 'forgot');
   };
+  // 手势被系统打断（来电/通知中心接管）：不评分，但必须把跟手状态清干净，
+  // 不然卡片会停在平移位置（审查抓过 touchcancel 无清理）。
+  const onTouchCancel = () => resetSwipe();
 
   /* ---------- 拼写检查 ---------- */
   const submitSpelling = (e) => {
@@ -199,9 +218,17 @@ export default function ReviewPane({
           </div>
         </div>
 
-        <div className={'review-word' + (!spelling && !revealed ? ' tappable' : '')}
+        <div className={'review-word' + (!spelling && !revealed ? ' tappable' : '') + (swipe ? ' swiping' : '')}
           onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+          onTouchMove={onTouchMove} onTouchCancel={onTouchCancel}
+          style={swipe ? { transform: 'translateX(' + swipe.dx + 'px)' } : undefined}
           onClick={() => { if (!spelling && !revealed) onReveal(); }}>
+          {/* 滑动评分的松手预告：过了阈值才出现，颜色与评分档一致（左=忘了红，右=简单绿） */}
+          {swipe && swipe.dir ? (
+            <span className={'swipe-hint ' + (swipe.dir === 'easy' ? 'swipe-easy' : 'swipe-forgot')}>
+              松手：{swipe.dir === 'easy' ? '简单' : '忘了'}
+            </span>
+          ) : null}
           {/* 只有**真的在拼写**时才藏词头（不然就是抄）。
               ⚠️ 这里曾经用 spell（用户的勾选）判断 —— 于是刚勾上就变成中文释义，
               用户的原话是"一开拼写模式全变成中文？"。勾选只是预约，本轮照常显示词头。 */}

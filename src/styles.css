@@ -575,6 +575,17 @@ body.drawer-open { overflow: hidden; }
 .review-pane { max-width: 720px; margin: 0 auto; }
 .review-word { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
 .review-word strong { font-size: 30px; letter-spacing: .01em; }
+/* 滑动评分跟手反馈：拖动时禁用过渡（跟手），松手后 0.18s 弹回；
+   角标预告松手后的评分档（左红=忘了，右绿=简单），颜色用已有的语义色变量。 */
+.review-word { transition: transform .18s ease; position: relative; }
+.review-word.swiping { transition: none; }
+.swipe-hint {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font-size: 12.5px; font-weight: 600; padding: 5px 11px; border-radius: 999px;
+  pointer-events: none; white-space: nowrap;
+}
+.swipe-forgot { left: 8px; background: var(--err-bg); color: var(--err-ink); border: 1px solid var(--err-line); }
+.swipe-easy { right: 8px; background: var(--ok-bg); color: var(--ok-ink); border: 1px solid var(--ok-line); }
 .review-answer { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .review-answer p { margin: 6px 0; line-height: 1.85; }
 .grade-bar { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
