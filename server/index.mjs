@@ -20,7 +20,7 @@ import { buildLookupSystemPrompt, normalizeDifficulty, ZH_CANDIDATE_PROMPT, buil
 import { sanitizeQuizGrade, sanitizeEntry, sanitizeQuiz, sanitizeFollowup, sanitizeSentenceTasks, sanitizeSentenceGrade, sanitizeZhCandidates, attachDict } from './resultShape.mjs';
 import { lookupDict, dictConflicts, resolveProvider, dictStats, normalizeWord } from './dict.mjs';
 import { createUpstashKv, createFileKv, kvPrefix } from './kv.mjs';
-import { resolveClientIp, trustProxyHops, trustCloudflareHeader } from './client-ip.mjs';
+import { resolveClientIp, trustProxyHops, trustCloudflareHeader, trustedProxyIps } from './client-ip.mjs';
 import { createAccounts } from './accounts.mjs';
 import { sendMail } from './mailer.mjs';
 import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, emptySnapshot, sanitizeSnapshot } from './sync.mjs';
@@ -62,6 +62,15 @@ const syncDurable = syncStore.kind !== 'file';
  * Key 归一化 / 接入点安全边界（防 SSRF）/ 发请求 都在 server/llm.mjs；
  * 这里只持有它的实例，路由与任务照常调用。 */
 const ALLOW_SERVER_KEY = process.env.ALLOW_SERVER_KEY !== '0';
+/* 未配置 Key 的报错文案：localhost 上给站长看操作步骤；公网访客看到"复制 .env.example"
+   既做不到也吓人（线上实测）—— 按请求来源分流。 */
+const isLocalReq = (req) => {
+  const s = String((req && req.socket && req.socket.remoteAddress) || '');
+  return s === '127.0.0.1' || s === '::1' || s === '::ffff:127.0.0.1';
+};
+const missingKeyMsg = (req) => isLocalReq(req)
+  ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+  : '本站暂时无法查询（模型服务还没配置好），请稍后再试';
 const llm = createLlm({ allowServerKey: ALLOW_SERVER_KEY });
 const { resolveEndpoint, parseJsonLoose, callLLM, callLLMStream, callVision, envKey } = llm;
 /** 模型/地址的取值口：路由里到处在用（原来是同文件的 stat，现在转发给 llm 模块） */
@@ -72,11 +81,13 @@ const stat = llm.stat;
  * 从右往左数自己信任的跳数（取最左值 = 限流形同虚设）。 */
 const TRUST_PROXY_HOPS = trustProxyHops(process.env, HOSTED);
 const TRUST_CF_IP = trustCloudflareHeader(process.env);
+const TRUST_PROXY_IPS = trustedProxyIps(process.env);
 const clientIp = (req) => resolveClientIp({
   headers: req.headers || {},
   socketIp: req.socket?.remoteAddress || '',
   hops: TRUST_PROXY_HOPS,
   trustCf: TRUST_CF_IP,
+  proxyAllowlist: TRUST_PROXY_IPS,
 });
 const RATE_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 30);
 const RATE_WINDOW_MS = 60_000;
@@ -398,48 +409,64 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
 
   const system = buildLookupSystemPrompt({ stream: Boolean(stream) });
   const user = buildLookupMessage({ term, kindHint, level, context, facts });
+  // 词条骨架只造一次：重试时保持 id/head 稳定，别让"同一个词两次生成"拿到两个 id
+  const baseId = 'wb-' + randomBytes(8).toString('hex');
   let raw = '';
-  if (stream) {
-    // 流式：边收边按行切段（见 server/stream.mjs 的三条硬规则）
-    const reader = createSegmentReader();
-    raw = await callLLMStream(
-      { baseUrl, model, apiKey, system, user, maxTokens: 8000 },
-      {
-        onDelta: (delta) => {
-          for (const seg of reader.feed(delta)) job.segments.push(seg);
-          // 只更新内存里的时间戳（每次写 KV 会把 KV 打爆）；KV 在完成时写一次
-          job.updatedAt = Date.now();
+  let final = null;
+  /* 模型偶发返回缺释义的残缺结构（实测：reluctant 触发过一次，重查即好）。
+     与其把"请重试"甩给用户让他重新排队，这里**自动重试一次**：
+     重试前清空上一轮残段（SSE 段带 index，客户端按 index 落位，不会叠出重复内容）。 */
+  for (let attempt = 1; attempt <= 2 && !final; attempt += 1) {
+    if (attempt > 1) job.segments = [];
+    raw = '';
+    if (stream) {
+      // 流式：边收边按行切段（见 server/stream.mjs 的三条硬规则）
+      const reader = createSegmentReader();
+      raw = await callLLMStream(
+        { baseUrl, model, apiKey, system, user, maxTokens: 8000 },
+        {
+          onDelta: (delta) => {
+            for (const seg of reader.feed(delta)) job.segments.push(seg);
+            // 只更新内存里的时间戳（每次写 KV 会把 KV 打爆）；KV 在完成时写一次
+            job.updatedAt = Date.now();
+          },
         },
-      },
-    );
-    for (const seg of reader.flush()) job.segments.push(seg);
-    job.streamStats = reader.stats;
-  } else {
-    raw = await callLLM({ baseUrl, model, apiKey, system, user, maxTokens: 8000 });
-  }
+      );
+      for (const seg of reader.flush()) job.segments.push(seg);
+      job.streamStats = reader.stats;
+    } else {
+      raw = await callLLM({ baseUrl, model, apiKey, system, user, maxTokens: 8000 });
+    }
 
-  const parsedIn = parseJsonLoose(raw);
-  const final = stream
-    ? finalizeStreamEntry({
-      segments: job.segments,
-      rawText: raw,
-      parseLoose: parseJsonLoose,
-      base: {
-        id: (parsedIn && parsedIn.id) || 'wb-' + randomBytes(8).toString('hex'),
+    const parsedIn = parseJsonLoose(raw);
+    final = stream
+      ? finalizeStreamEntry({
+        segments: job.segments,
+        rawText: raw,
+        parseLoose: parseJsonLoose,
+        base: {
+          id: (parsedIn && parsedIn.id) || baseId,
+          head: (parsedIn && parsedIn.head) || term,
+          level,
+          createdAt: Date.now(),
+        },
+      })
+      : { entry: (parsedIn ? sanitizeEntry({
+        ...parsedIn,
+        id: (parsedIn && parsedIn.id) || baseId,
         head: (parsedIn && parsedIn.head) || term,
         level,
         createdAt: Date.now(),
-      },
-    })
-    : { entry: (parsedIn ? sanitizeEntry({
-      ...parsedIn,
-      id: (parsedIn && parsedIn.id) || 'wb-' + randomBytes(8).toString('hex'),
-      head: (parsedIn && parsedIn.head) || term,
-      level,
-      createdAt: Date.now(),
-    }) : null), mode: 'oneshot' };
+      }) : null), mode: 'oneshot' };
+  }
 
-  if (!final.entry) throw new Error('模型返回的词条不完整（缺少释义），请重试');
+  if (!final || !final.entry) {
+    // userFacing：jobs.mjs 对这类错误原样透传，不再包一层"（请重试；若反复出现…）"
+    // —— 否则文案变成"请重试（请重试；…）"（线上实测）。
+    const err = new Error('模型返回的词条不完整（缺少释义），请重试');
+    err.userFacing = true;
+    throw err;
+  }
   job.data = { entry: applyDict(final.entry, dictResult) };
   job.streamMode = final.mode;          // segments（正常）/ fallback（模型没按分段来）/ oneshot（关流式）
   // 没收到 {"t":"done"} 说明模型中途断了：卡片能用但可能少几块，前端据此提示"可重试补全"
@@ -793,7 +820,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -848,7 +875,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -884,7 +911,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -937,7 +964,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -968,7 +995,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -1017,7 +1044,7 @@ const server = http.createServer(async (req, res) => {
       if (!ep.apiKey) {
         return json(res, 400, {
           error: ALLOW_SERVER_KEY
-            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            ? missingKeyMsg(req)
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
@@ -1134,6 +1161,9 @@ const server = http.createServer(async (req, res) => {
       const code = String(syncMatch[1] || '').toLowerCase();
       if (!isValidSyncCode(code)) return json(res, 400, { error: '同步码格式不正确（应为 32 位十六进制）' });
       if (req.method === 'GET') {
+        // ⚠️ 读也要限流：每一次 GET 都是一次对 Upstash 的真实命令（按命令计费），
+        // 原先 POST 限了 GET 没限 —— 匿名脚本可以拿假同步码把读配额刷爆（成本放大器）。
+        if (rateLimited(req)) return json(res, 429, { error: '请求过于频繁，请稍后再试' });
         const doc = await syncStore.read(code);
         if (!doc) return json(res, 404, { error: '同步码不存在，请检查是否输错' });
         return json(res, 200, { ok: true, version: doc.version, updatedAt: doc.updatedAt, data: doc.data });

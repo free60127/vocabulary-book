@@ -38,7 +38,9 @@ export default function ImageImportModal({ imp, books, onCreateBook, onClose }) 
   };
 
   return (
-    <div className="modal-mask" onClick={onClose}>
+    /* 遮罩点击即关只允许在「选图」阶段：识别等待的 10~40 秒里误点一下遮罩，
+       弹窗一关轮询结果就无处展示，用户以为白等了（实测）。工作阶段只能走右上角 × 显式关闭。 */
+    <div className="modal-mask" onClick={imp.phase === 'pick' ? onClose : undefined}>
       <div className="modal import-modal" role="dialog" ref={trapRef} aria-modal="true" aria-label="拍照导入单词" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h2>拍照 / 上传导入</h2>

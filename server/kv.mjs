@@ -74,13 +74,22 @@ export function createFileKv(dir) {
       return o && typeof o.v === 'string' ? o.v : null;
     } catch { return null; }
   };
+  // 原子写：先写同目录临时文件再 rename 覆盖。裸 writeFileSync 被进程中途打断（崩溃/被杀/
+  // 平台重启）会留下半截 JSON —— 读侧 parse 失败静默当 null，等于任务/预算/会话数据悄悄丢；
+  // sync.mjs 的 writeAtomic 一直是 tmp+rename，这里把文件驱动补齐成同一做法。
+  // Windows 上 renameSync 覆盖已存在目标没有问题（Node 用 MOVEFILE_REPLACE_EXISTING）。
+  const writeFileAtomic = (f, body) => {
+    const tmp = f + '.tmp-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
+    fs.writeFileSync(tmp, body);
+    fs.renameSync(tmp, f);
+  };
   const writeEnv = (f, v, ttlSec) => {
     const body = JSON.stringify({ v: String(v), e: ttlSec > 0 ? Date.now() + ttlSec * 1000 : 0 });
     try {
-      fs.writeFileSync(f, body);
+      writeFileAtomic(f, body);
     } catch (e) {
       // 目录可能被清掉（平台重置磁盘 / 手工清理）——自愈一次
-      if (isMissing(e)) { ensure(); fs.writeFileSync(f, body); return; }
+      if (isMissing(e)) { ensure(); writeFileAtomic(f, body); return; }
       throw e;
     }
   };
@@ -104,7 +113,7 @@ export function createFileKv(dir) {
       let exp = 0;
       try { exp = JSON.parse(fs.readFileSync(f, 'utf8')).e || 0; } catch { /* 新键 */ }
       const body = JSON.stringify({ v: String(next), e: exp });
-      try { fs.writeFileSync(f, body); } catch (e) { if (isMissing(e)) { ensure(); fs.writeFileSync(f, body); } else throw e; }
+      try { writeFileAtomic(f, body); } catch (e) { if (isMissing(e)) { ensure(); writeFileAtomic(f, body); } else throw e; }
       return next;
     },
     /** 键总数（本地就是文件个数）；顺带能给出占用字节，用于日志里的量级提示 */

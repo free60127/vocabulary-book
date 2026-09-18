@@ -32,6 +32,23 @@ export function trustCloudflareHeader(env = process.env) {
   return String((env && env.TRUST_CF_CONNECTING_IP) || '') === '1';
 }
 
+
+/**
+ * 可信代理的 socket IP 名单（可选，TRUST_PROXY_IPS，逗号分隔）。
+ *
+ * 堵的是这个口子：配置了 hops≥1 时，若源站**能被直连**（自托管 VPS 没挡住绕过 nginx 的流量），
+ * 攻击者直连并伪造恰好 hops 个 XFF 条目，chain.length === hops 会把他伪造的条目当成真 IP：
+ * 限流、登录失败锁全部可换头重置。设了名单后：只有 socket 对端确实是名单内的代理时才采信
+ * XFF，否则一律退回 socket 地址（宁可共用一个桶，也不放行伪造头）。
+ * 托管平台（Render 等）拿不到代理 IP 列表：不设即可，行为与从前一致。
+ */
+export function trustedProxyIps(env = process.env) {
+  return String((env && env.TRUST_PROXY_IPS) || '')
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /**
  * 解析出用于限流的客户端标识。
  * @param {object} o
@@ -41,13 +58,17 @@ export function trustCloudflareHeader(env = process.env) {
  * @param {boolean} [o.trustCf] 是否信任 CF-Connecting-IP
  * @returns {string}
  */
-export function resolveClientIp({ headers = {}, socketIp = '', hops = 0, trustCf = false } = {}) {
-  const sock = String(socketIp || '').trim() || 'unknown';
+export function resolveClientIp({ headers = {}, socketIp = '', hops = 0, trustCf = false, proxyAllowlist = [] } = {}) {
+  let sock = String(socketIp || '').trim() || 'unknown';
+  // IPv6 环回在 Node 里可能以映射形式出现，统一掉再比对名单
+  if (sock === '::ffff:127.0.0.1') sock = '127.0.0.1';
+  // 名单启用时：对端不是名单内的代理 → XFF 一概不信，直接用 socket 地址
+  const trustChain = hops > 0 && (proxyAllowlist.length === 0 || proxyAllowlist.includes(sock));
   if (trustCf) {
     const cf = String(headers['cf-connecting-ip'] || '').trim();
     if (cf) return cf;
   }
-  if (hops > 0) {
+  if (trustChain) {
     const chain = String(headers['x-forwarded-for'] || '')
       .split(',')
       .map((s) => s.trim())

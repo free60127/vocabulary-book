@@ -37,7 +37,25 @@ export function applyTheme(pref) {
     : false;
   const theme = resolveTheme(pref, prefersDark);
   document.documentElement.dataset.theme = theme;
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', theme === 'dark' ? DARK_BG : LIGHT_BG);
+  /* index.html 里是**两条**带 media 的 theme-color：跟随系统时浏览器自己挑，
+     但用户钉住亮/暗后（页面亮、系统暗），只更新第一条的话地址栏永远走第二条的深色 ——
+     与页面配色相反（实测）。所以：钉住时摘掉 media、两条都写成同一色；
+     回到'跟随系统'时恢复双 media 结构，把切换权还给浏览器。 */
+  const metas = Array.from(document.querySelectorAll('meta[name="theme-color"]'));
+  if (pref !== 'system') {
+    const color = theme === 'dark' ? DARK_BG : LIGHT_BG;
+    for (const m of metas) { m.removeAttribute('media'); m.setAttribute('content', color); }
+    if (!metas.length) {
+      const m = document.createElement('meta');
+      m.setAttribute('name', 'theme-color');
+      m.setAttribute('content', color);
+      document.head.appendChild(m);
+    }
+  } else if (metas.length >= 2) {
+    metas[0].setAttribute('media', '(prefers-color-scheme: light)');
+    metas[0].setAttribute('content', LIGHT_BG);
+    metas[1].setAttribute('media', '(prefers-color-scheme: dark)');
+    metas[1].setAttribute('content', DARK_BG);
+  }
   return theme;
 }

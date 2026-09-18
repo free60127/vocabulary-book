@@ -19,7 +19,12 @@ export default function AuthModal({
   const [mode, setMode] = useState('login');       // login | register | forgot | reset | change
   const [form, setForm] = useState({ email: '', password: '', code: '', newPassword: '' });
   const [localErr, setLocalErr] = useState('');
-  useEscape(onClose);
+  /* 注销确认：做成弹窗内的输入行，而不是 window.prompt —— 手机上 prompt 会被软键盘
+     顶掉、部分内嵌 WebView 直接拦截（返回 null 后代码静默什么都不做，像"按钮坏了"）。
+     项目里 NewBookModal 当年就为同一个原因换成了应用内弹窗，这里补齐。 */
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePw, setDeletePw] = useState('');
+  useEscape(() => { if (deleteOpen) { setDeleteOpen(false); setDeletePw(''); } else onClose(); });
   const field = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = () => {
@@ -59,8 +64,22 @@ export default function AuthModal({
               <button className="ghost-btn" onClick={onSignOut} disabled={busy}>退出登录</button>
               <button className="ghost-btn" onClick={onSignOutAll} disabled={busy}>退出全部设备</button>
               <button className="ghost-btn" onClick={() => { setMode(mode === 'change' ? 'login' : 'change'); setLocalErr(''); }} disabled={busy}>修改密码</button>
-              <button className="ghost-btn" onClick={() => { const p = window.prompt('输入当前密码以注销账号（不可恢复）'); if (p) onDeleteAccount(p); }} disabled={busy}>注销账号</button>
+              <button className="ghost-btn" onClick={() => { setDeleteOpen(true); setLocalErr(''); }} disabled={busy}>注销账号</button>
             </div>
+
+            {deleteOpen ? (
+              <div className="auth-form" style={{ marginTop: 12 }}>
+                <label className="auth-label">输入当前密码以注销账号（不可恢复）
+                  <input type="password" value={deletePw} onChange={(e) => setDeletePw(e.target.value)}
+                    autoComplete="current-password" disabled={busy} />
+                </label>
+                <div className="modal-actions">
+                  <button className="ghost-btn" onClick={() => { setDeleteOpen(false); setDeletePw(''); }} disabled={busy}>取消</button>
+                  <button className="primary-btn" disabled={busy || !deletePw}
+                    onClick={() => { setLocalErr(''); onDeleteAccount(deletePw); setDeletePw(''); setDeleteOpen(false); }}>确认注销</button>
+                </div>
+              </div>
+            ) : null}
 
             {mode === 'change' ? (
               <div className="auth-form" style={{ marginTop: 12 }}>

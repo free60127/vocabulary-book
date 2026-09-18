@@ -49,7 +49,10 @@ self.addEventListener('message', (event) => {
     const cache = await caches.open(CACHE);
     for (const u of data.urls.slice(0, 80)) {
       try {
-        const res = await fetch(u, { cache: 'reload' });
+        // cache:'default'（走 HTTP 缓存）而不是 'reload'：vite 产物文件名带 hash + immutable，
+        // HTTP 缓存里的就是正确版本，default 命中即零网络；reload 会**绕过 HTTP 缓存全额重下**，
+        // 手机流量用户每次打开页面都要重新下载全部 JS/CSS（审计实测）。
+        const res = await fetch(u, { cache: 'default' });
         if (res && res.ok) await cache.put(u, res);
       } catch { /* 单个资源失败不影响其他 */ }
     }

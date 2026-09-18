@@ -116,7 +116,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
   const K_EMAIL = (e) => PREFIX + 'email:' + e;
   const K_USER = (id) => PREFIX + 'user:' + id;
   const K_SESS = (h) => PREFIX + 'sess:' + h;
-  const K_FAIL = (e) => PREFIX + 'fail:' + e;
+  const K_FAIL = (e, ip) => PREFIX + 'fail:' + e + '|' + ip;
   const K_RESET = (e) => PREFIX + 'reset:' + e;
   const K_RATE = (s) => PREFIX + 'rate:' + s;
   /** 发验证码失败的统一兜底文案 */
@@ -264,18 +264,26 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
       if (rIp.failed) return { ok: false, status: 503, error: '服务繁忙，请稍后再试' };
       if (rIp.over) return { ok: false, status: 429, error: '尝试过于频繁，请稍后再试' };
 
-      const fail = readJson(await kv.get(K_FAIL(v.email)));
-      if (fail && Number(fail.lock) > Date.now()) {
+      /* 失败锁按 (邮箱 + 来源 IP) 组合键，而不是按邮箱全局锁 ——
+       * 按邮箱全局锁的话，任何第三方对着受害者邮箱试错 8 次就能把人锁在门外 15 分钟
+       * （登录拒绝服务：受害者什么都没做错，账号却被锁）。组合键后攻击者只锁得住
+       * "自己的 IP"，受害者本人登录不受影响；防爆破强度不丢 —— 单 IP 仍有上面的
+       * 每 10 分钟 30 次硬限流，跨 IP 慢速爆破被 8 次锁大幅拖慢。 */
+      const failKey = K_FAIL(v.email, ip);
+      const user = await loadUserByEmail(v.email);
+      const fail = readJson(await kv.get(failKey));
+      // 密码刚被重置/修改过 → 旧失败锁视为过期（不然"改完密码还得干等 15 分钟"）
+      const staleLock = user && Number((fail && fail.lock) || 0) <= Number(user.pwChangedAt || 0);
+      if (fail && Number(fail.lock) > Date.now() && !staleLock) {
         return { ok: false, status: 429, error: '登录尝试过多，请 15 分钟后再试' };
       }
 
-      const user = await loadUserByEmail(v.email);
       const passOk = user ? await verifyHash(v.password, user.passwordHash) : false;
       if (!user || !passOk) {
         // 记失败次数：KV 没有原子自增+自定义结构，但这里并发窗口极小，
         // 且最坏后果只是"少记一次"，不影响安全性（限流本身按 IP 也有一道）。
         const n = Number(fail && fail.n || 0) + 1;
-        await kv.set(K_FAIL(v.email), JSON.stringify({
+        await kv.set(failKey, JSON.stringify({
           n,
           lock: n >= LOGIN_FAIL_MAX ? Date.now() + FAIL_TTL_SEC * 1000 : 0,
         }), FAIL_TTL_SEC);
@@ -283,7 +291,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
         return { ok: false, status: 401, error: '邮箱或密码不正确' };
       }
 
-      await kv.del(K_FAIL(v.email));
+      await kv.del(failKey);
       const token = await issueSession(user, device);
       return { ok: true, status: 200, token, user: publicUser(user), sync: user.syncEnc || null };
     },
@@ -346,6 +354,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
           return { ok: false, status: 401, error: '当前密码不正确' };
         }
         u.passwordHash = await makeHash(String(newPassword));
+        u.pwChangedAt = Date.now();
         if (s) u.syncEnc = s;
         u.sessionEpoch = Number(u.sessionEpoch) + 1; // 世代号 +1 → 所有旧会话失效
         await saveUser(u);
@@ -366,7 +375,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
         }
         await kv.del(K_USER(u.id));
         await kv.del(K_EMAIL(u.email));
-        await kv.del(K_FAIL(u.email));
+        // 失败锁是 (邮箱+IP) 组合键且带 TTL：账号已删，键留着也无人可锁，等 TTL 自然过期
         // 会话不用遍历删：用户没了，sessionUser() 自然查不到
         return { ok: true, status: 200 };
       });
@@ -464,6 +473,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
         if (!user) return { ok: false, status: 404, error: '账号不存在' };
 
         user.passwordHash = await makeHash(String(newPassword));
+        user.pwChangedAt = Date.now();
         // 重置时没有旧密码 → 旧同步码解不开，只能清掉（前端可传新密码加密的那份）
         user.syncEnc = s || null;
         user.sessionEpoch = Number(user.sessionEpoch) + 1; // 全部旧会话失效
@@ -474,11 +484,7 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
       });
     },
 
-    /** 清理接口（可选）：删除某邮箱的失败计数，客服兜底用 */
-    async clearLoginFail(email) {
-      const e = String(email || '').trim().toLowerCase();
-      await kv.del(K_FAIL(e));
-      return { ok: true, status: 200 };
-    },
+    // （原 clearLoginFail 已删：失败锁改成 (邮箱+IP) 组合键后按邮箱删不中，
+    //  且它是无鉴权的死代码 —— 留着就是将来接错路由即变成"未认证解锁接口"的隐患。）
   };
 }
