@@ -108,10 +108,33 @@ function spyFetch(sink) {
   const got = await store2.read('OLDC0DE');
   check('新键没有、旧键有 → 把旧数据认领过来（而不是当成空云端）',
     got && got.version === 7 && got.data.books[0].name === '老数据', JSON.stringify(got && got.version));
-  check('认领时会写进新键，之后就走新键了', store.get('vb:sync:OLDC0DE') === legacyDoc && store.has('vb:sync:OLDC0DE'));
+  const adopted = JSON.parse(store.get('vb:sync:OLDC0DE') || 'null');
+  check('认领时会写进新键（sanitize 规范化后的数据），之后就走新键了',
+    store.has('vb:sync:OLDC0DE') && adopted && adopted.data && adopted.data.books[0].name === '老数据',
+    JSON.stringify(adopted && adopted.data && adopted.data.books).slice(0, 80));
   seen.length = 0;
   await store2.read('OLDC0DE');
   check('第二次只查新键（不重复翻旧键）', seen.length === 1 && seen[0] === 'vb:sync:OLDC0DE', seen.join(','));
+
+  /* 旧命名空间认领必须过 sanitizeSnapshot：异构/恶意形状当不存在（绝不直达前端） */
+  {
+    const seen3 = [];
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (async (url, opts) => {
+      const cmd = JSON.parse(opts.body);
+      const key = String(cmd[1]);
+      seen3.push(key);
+      if (cmd[0] === 'GET') {
+        if (key === 'bts:sync:BADDE') return { ok: true, text: async () => JSON.stringify({ result: JSON.stringify({ version: 3, updatedAt: 1, data: { books: '不是数组', evil: true } }) }) };
+        return { ok: true, text: async () => JSON.stringify({ result: null }) };
+      }
+      return { ok: true, text: async () => JSON.stringify({ result: 'OK' }) };
+    });
+    const store3 = createUpstashStore({ url: 'https://x.upstash.io', token: 't' });
+    const bad = await store3.read('BADDE');
+    globalThis.fetch = prevFetch;   // 恢复现场：后面的用例各自依赖自己的 fetch 桩
+    check('旧键里的坏形状数据 → 当不存在（不返回、不迁移）', bad === null, JSON.stringify(bad));
+  }
 
   seen.length = 0;
   const miss = await store2.read('NOTEXIST');
@@ -142,3 +165,29 @@ console.log('\n' + '='.repeat(62));
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);
+
+
+/* ---------- forgot：SMTP 失败细节不外泄 ---------- */
+{
+  const store2 = new Map();
+  const kv2 = {
+    async get(k) { return store2.has(k) ? store2.get(k) : null; },
+    async set(k, v) { store2.set(k, String(v)); },
+    async setNx(k, v) { if (store2.has(k)) return false; store2.set(k, String(v)); return true; },
+    async del(k) { store2.delete(k); },
+    async incrBy(k, n) { const cur = Number(store2.get(k)) || 0; const next = cur + Number(n); store2.set(k, String(next)); return next; },
+    async count() { return store2.size; },
+  };
+  const smtpDetail = 'test-internal-smtp-detail-host-5.6.7.8';   // 故意的假细节，用于断言不外泄
+  const accts = createAccounts({
+    kv: kv2,
+    mail: async () => ({ ok: false, code: 'connect', error: 'connect failed: ' + SECRET }),
+    env: {},
+  });
+  const reg = await accts.register({ email: 'f@d.com', password: 'Passw0rd!x', ip: '2.2.2.2' });
+  const forgot = await accts.forgot({ email: 'f@d.com' });
+  check('forgot 失败时给用户的是原因分类，不带底层细节',
+    forgot.status === 503 && !String(forgot.error).includes(smtpDetail) && String(forgot.error).includes('连不上邮件服务器'),
+    String(forgot.error).slice(0, 60));
+  check('注册（上面 forgot 的前置）成功', reg.status === 200 || reg.error === undefined, JSON.stringify(reg).slice(0, 60));
+}

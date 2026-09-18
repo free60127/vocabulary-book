@@ -227,7 +227,12 @@ async function callVisionWithFallback({ baseUrl, model, apiKey, image }) {
 async function runOcrJob(jobId, { image, baseUrl, model, apiKey }) {
   const job = await findJob(jobId);
   if (!job) return;
-  const hash = 'ocr:' + createHash('sha1').update(String(image)).digest('hex').slice(0, 24);
+  // ⚠️ 缓存键必须绑定「内容 + 模型 + 提示词版本」：只有内容哈希的话，换了识别模型
+  // （AI_VISION_MODEL）或改了 OCR_PROMPT 之后，最长 7 天内还会继续返回旧结果。
+  const hash = 'ocr:' + createHash('sha1').update(String(image))
+    .update(' ' + String(model || ''))
+    .update(' ocr-prompt-v2')   // 改 OCR_PROMPT 内容时 bump 这一位，让旧缓存全部失效
+    .digest('hex').slice(0, 24);
   const cached = await kv.get(KV_PREFIX + hash).catch(() => null);
   if (cached) {
     try {

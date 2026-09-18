@@ -421,10 +421,10 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
         // 不会再出现"forgot mail error: " 后面什么都没有、没法排查的情况。
         console.error('forgot mail error:', JSON.stringify(r));
         await kv.del(K_RESET(e)); // 发不出去就把码撤掉，避免"用户没收到但库里占着"
-        // 附上底层细节（截断）—— 只关系到服务端自己的发信能力，不涉及任何用户数据；
-        // 有它才能一眼看出是"认证失败"还是"连接被拒"，否则又得去翻日志。
-        const detail = r && r.error ? ` [${String(r.error).slice(0, 140)}]` : '';
-        return { ok: false, status: 503, error: (MAIL_REASON[r && r.code] || MAIL_FAIL) + detail };
+        // ⚠️ 底层细节（主机/端口/授权码提示）只进服务端日志，**不**回给未认证调用方 ——
+        // /api/auth/forgot 是公开接口，带细节等于泄露发信基础设施信息（审计项）。
+        // 排障用上面的 console.error 就够了；用户拿到的是可读的原因分类。
+        return { ok: false, status: 503, error: MAIL_REASON[r && r.code] || MAIL_FAIL };
       }
       return { ok: true, status: 200 };
     },

@@ -260,12 +260,17 @@ export function createUpstashStore({ url, token, prefix, legacyPrefix }) {
       // 新键没有 → 看看旧键里有没有同一串码的旧数据（改前缀之前写的）
       const older = parse(await call(['GET', LEGACY + code]));
       if (!older) return null;
+      // ⚠️ 跨项目搬来的旧数据形状不受本应用约束：必须先过 sanitizeSnapshot 才能返回/迁移 ——
+      // 异构或恶意形状一律当不存在，绝不直达前端渲染路径，也不往新命名空间扩散（审计项）。
+      const clean = sanitizeSnapshot(older && older.data);
+      if (!clean || clean.ok !== true) return null;   // 成功时是 { ok:true, data, dropped } 包装
       if (!adoptedOnce) {
         adoptedOnce = true;
         console.warn('[sync] 在旧命名空间 ' + LEGACY + ' 里发现该同步码的历史数据，已迁移到 ' + NS + '（KV_PREFIX 变更的兼容处理）');
       }
-      await call(['SET', NS + code, JSON.stringify(older)]);
-      return older;
+      const doc = { ...older, data: clean.data };
+      await call(['SET', NS + code, JSON.stringify(doc)]);
+      return doc;
     },
     async write(code, doc) {
       await call(['SET', NS + code, JSON.stringify(doc)]);
