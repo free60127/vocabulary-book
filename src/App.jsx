@@ -382,7 +382,28 @@ export default function App() {
     }
   }
 
+  /**
+   * 查词"在途"标记 —— 挡住重复提交。
+   *
+   * 为什么不能只靠按钮的 disabled：React 的 state 更新是异步的，同一帧里连点两次，
+   * 第二次点击发生时按钮**还没被禁用**；而输入框回车那条路（SearchPane 里 `onKeyDown`
+   * 直接调 onLookup）更是完全不看 busy。实测：连按 2 次回车 = 2 个独立任务、
+   * 2 次真实模型调用、服务端扣 2 次每日额度；快速双击按钮同样是 2 个。
+   * 服务端也**没有按词面去重**（每次 POST 都新建 randomUUID 任务），所以必须在客户端拦住。
+   * 用 ref 而不是 state：ref 是同步写入的，下一次调用立刻能看到。
+   */
+  const lookupBusyRef = useRef(false)
+
+  /* 「加入单词本」选中的本子：搜索栏旁的快捷入口与卡片底部保存栏**共用这一个选择**
+     （状态提升到 App，两处显示/保存永远一致）。换一个词（entry.id 变了）就清掉手动选择 ——
+     查上一个词时随手选的本子，不该悄悄带到下一个词上。 */
+  const [saveBookPick, setSaveBookPick] = useState('')
+  const entryKey = entry ? entry.id : ''
+  useEffect(() => { setSaveBookPick('') }, [entryKey])
+
   const runLookup = async (term, { saveToBookId } = {}) => {
+    // 已经在查了：明确说一句，而不是"点了没反应"（用户会以为按钮坏了而反复点）
+    if (lookupBusyRef.current) { flash('正在查上一个词，稍等一下…', TIP_NORMAL_MS); return }
     const q = String(term || '').trim()
     if (!q) { setError('请先输入要查的单词或短语'); return }
     // 长度上限：查词是"一个词/短语"，不是整段文字。超长直接说清楚，
@@ -391,10 +412,16 @@ export default function App() {
       setError('输入太长了（' + q.length + ' 个字符）—— 查词一次只处理一个词或短语，请截短到 120 字以内')
       return
     }
+    lookupBusyRef.current = true
     // 中文输入 → 先给候选词（中文词与英文词不是一一对应，直接讲解会得到自相矛盾的卡片）
-    if (hasCJK(q)) { await runZhLookup(q); return }
+    if (hasCJK(q)) {
+      try { await runZhLookup(q) } finally { lookupBusyRef.current = false }
+      return
+    }
     setError(''); setBusy(true); setEntry(null); setProgress('正在提交…')
     try {
+      // 流式回退时要复用的任务号（流式那一步已经建好任务了，别再建一个）
+      let fallbackJobId = ''
       /**
        * 流式优先：边生成边看。
        * 失败或 6 秒没首段 → 回退到轮询（**同一个 jobId** 继续等，不重复提交、不重复计费）。
@@ -422,9 +449,18 @@ export default function App() {
           if (sres.streamIncomplete) flash('这次讲解中途断了，可能有内容缺失 —— 可以再查一次补全', TIP_LONG_MS)
           return
         }
-        setProgress('正在讲解这个词…')
+        /**
+         * 回退到轮询时**复用流式那一步已经建好的任务**（sres.jobId）。
+         * 这里原来是直接 submitAndPoll（不带 jobId）→ 又 POST 一次 → 同一个词跑两遍模型、
+         * 花两份钱，而任务在服务端其实已经在跑了。上面那句注释承诺的"同一个 jobId，
+         * 不重复提交、不重复计费"必须由这行兑现 —— 弱网、代理拦 SSE、冷启动时都会走到这。
+         */
+        setProgress(sres.jobId ? '正在讲解这个词…（已切回等待模式）' : '正在讲解这个词…')
+        fallbackJobId = sres.jobId
       }
       const out = await submitAndPoll({
+        // 有 jobId 就不再提交（submitAndPoll 会跳过 submit）；没有才是真的重来一次
+        jobId: fallbackJobId,
         submit: () => lookup({ term: q, level, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey }),
         fetchJob: getLookupJob,
         intervalMs: POLL_LOOKUP_MS,
@@ -465,6 +501,7 @@ export default function App() {
       setError(err.message || '查询失败'); setProgress('')
     } finally {
       setBusy(false)
+      lookupBusyRef.current = false   // 放锁：成功 / 失败 / 超时都必须释放，否则查词按钮从此点不动
     }
   }
 
@@ -873,6 +910,11 @@ export default function App() {
     onOpenBackup: () => { closeSidebarOnMobile(); setBackupOpen(true) },
   }
 
+  /* 「加入单词本」的生效目标：手动选过用手动值，否则"已收进的那个本子 → 第一个本子"。
+     搜索栏快捷入口与卡片底部保存栏都用它，保证两边一致。 */
+  const existingBook = entry ? (findEntryBook(books, entry.id) || findBookByHead(books, entry.head)) : null
+  const saveTargetBookId = saveBookPick || existingBook?.id || (books[0] && books[0].id) || ''
+
   return (
     <>
     <div className="app">
@@ -955,12 +997,14 @@ export default function App() {
             level={level} setLevel={setLevel} levels={LEVELS}
             busy={busy} progress={progress} error={error} onDismissError={() => setError('')}
             searchRef={searchRef}
-            entry={entry} books={books}
-            existing={entry ? (findEntryBook(books, entry.id) || findBookByHead(books, entry.head)) : null}
+            /* entry 取「已完成的词条；没有但在流式生成中就取半成品」—— 之前同一 prop
+               在这里写了两遍（entry 与 entry||stream.partial），靠后者覆盖生效，误导阅读。 */
+            entry={entry || stream.partial} books={books}
+            existing={existingBook}
+            bookId={saveTargetBookId} onBookIdChange={setSaveBookPick}
             onExportPdf={(e) => print.start({ kind: 'entry', entry: e })}
             onToggleFavorite={toggleFavorite} isFavorite={isFavorite}
             onSave={saveToBook} onCreateBook={createAndSave} onLookupWord={runLookup}
-            entry={entry || stream.partial}
             streaming={!entry && Boolean(stream.partial)}
             streamProgress={stream.progress}
             streamLabels={stream.labels}

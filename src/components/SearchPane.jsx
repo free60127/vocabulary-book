@@ -1,5 +1,5 @@
 import React from 'react';
-import { Flame, LoaderCircle, Search, Sparkles, X } from 'lucide-react';
+import { Flame, LoaderCircle, Plus, Search, Sparkles, X } from 'lucide-react';
 import EntryCard from './EntryCard.jsx';
 import ZhCandidates from './ZhCandidates.jsx';
 
@@ -16,9 +16,15 @@ export default function SearchPane({
   busy, progress, error, onDismissError,
   entry, streaming, streamProgress, streamLabels, existing, books, onExportPdf, onToggleFavorite, isFavorite,
   onSave, onCreateBook, onLookupWord, searchRef,
+  /* 「加入单词本」的选本（状态提升在 App）：搜索栏快捷入口与卡片底部保存栏共用 */
+  bookId, onBookIdChange,
   onAsk, askBusy, askError, followups, onClearFollowups,
   zhTerm, zhItems, onPickZh, onDismissZh,
 }) {
+  /* 快捷入口的按钮文案：与底部保存栏同一套语义，但更短（手机上这一行还要放下拉框） */
+  const quickLabel = streaming ? '生成中…'
+    : books.length ? (existing ? '更新到单词本' : '加入单词本')
+    : '新建并加入';
   return (
     <section className="editor">
       <div className="search-bar">
@@ -46,6 +52,24 @@ export default function SearchPane({
         <button className="primary-btn" onClick={() => onLookup(query)} disabled={busy}>
           {busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}{busy ? '讲解中…' : '查一下'}
         </button>
+        {/* 「加入单词本」快捷入口（用户反馈：存词要滚到卡片最底下才够得着）。
+            当前有词条时就地出现，与卡片底部保存栏**共用同一个选本**（bookId 提升在 App）。
+            流式生成中禁用：存早了落下来的是半张卡。 */}
+        {entry ? (
+          <span className="quick-save">
+            {books.length ? (
+              <select className="ocr-mode" value={bookId} disabled={streaming}
+                onChange={(e) => onBookIdChange(e.target.value)} title="存到哪个单词本">
+                {books.map((b) => <option key={b.id} value={b.id}>{b.name}（{b.entries.length}）</option>)}
+              </select>
+            ) : null}
+            <button className="primary-btn" disabled={streaming}
+              onClick={() => (books.length ? onSave(bookId) : onCreateBook())}
+              title={streaming ? '等讲解生成完再存（现在存下来的会缺内容）' : ''}>
+              <Plus size={16} />{quickLabel}
+            </button>
+          </span>
+        ) : null}
       </div>
 
       {error ? (
@@ -85,6 +109,7 @@ export default function SearchPane({
           onExportPdf={onExportPdf}
           onToggleFavorite={onToggleFavorite} isFavorite={isFavorite}
           onSave={onSave} onCreateBook={onCreateBook} onLookupWord={onLookupWord}
+          bookId={bookId} onBookIdChange={onBookIdChange}
           onAsk={onAsk} askBusy={askBusy} askError={askError}
           followups={followups} onClearFollowups={onClearFollowups} />
       ) : null}

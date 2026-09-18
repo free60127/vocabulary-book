@@ -516,6 +516,13 @@ body.drawer-open { overflow: hidden; }
   .search-input { min-height: 44px; }
 }
 .search-input::placeholder { color: #98a4b0; }
+/* 搜索栏上的「加入单词本」快捷入口（用户反馈：存词要滚到卡片最底下才够得着）。
+   与卡片底部保存栏同一套动作；min-width:0 + 下拉限宽：本子名再长也只是省略号截断，
+   不能把这一行撑爆（手机端"档位/查一下"同排）。 */
+.quick-save { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.quick-save .ocr-mode { max-width: 10em; }
+/* 手机端这一行换行后独占一排：按钮文字不折行（"更新到单词本"折成两行很难看） */
+.quick-save .primary-btn { white-space: nowrap; }
 @media screen and (max-width: 900px) {
   .search-bar { flex-wrap: wrap; }
   /* ⚠️ 这两条原来写给 .search-input：手机端让输入框独占第一行。

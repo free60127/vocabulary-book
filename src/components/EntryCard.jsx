@@ -76,8 +76,13 @@ function DictSection({ dict }) {
  */
 export default function EntryCard({ entry, books = [], existing, onSave, onCreateBook, onExportPdf, variant = 'screen',
   streaming = false, streamProgress = '', streamLabels = [],
-  onToggleFavorite, isFavorite, onLookupWord, onAsk, askBusy, askError, followups, onClearFollowups }) {
-  const [bookId, setBookId] = useState(existing?.id || books[0]?.id || '');
+  onToggleFavorite, isFavorite, onLookupWord, onAsk, askBusy, askError, followups, onClearFollowups,
+  bookId: bookIdProp, onBookIdChange }) {
+  /* 选中的本子：调用方传了 bookId（状态提升在 App，搜索栏快捷入口与这里共用）就用受控值；
+     否则（打印等场景）回退到内部状态。 */
+  const [localBookId, setLocalBookId] = useState(existing?.id || books[0]?.id || '');
+  const bookId = bookIdProp !== undefined ? bookIdProp : localBookId;
+  const chooseBookId = (id) => (onBookIdChange ? onBookIdChange(id) : setLocalBookId(id));
   const [askText, setAskText] = useState('');
   const saved = Boolean(existing);
   // 打印/导出 PDF 时去掉一切交互件：朗读按钮、保存栏在纸上毫无意义，只会占地方。
@@ -305,7 +310,7 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
           </button>
         ) : null}
         {books.length ? (
-          <select className="ocr-mode" value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={streaming} title="选一个单词本">
+          <select className="ocr-mode" value={bookId} onChange={(e) => chooseBookId(e.target.value)} disabled={streaming} title="选一个单词本">
             {books.map((b) => <option key={b.id} value={b.id}>{b.name}（{b.entries.length}）</option>)}
           </select>
         ) : null}

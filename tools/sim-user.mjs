@@ -2078,6 +2078,11 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     AI_BASE_URL: mocks.aiBaseUrl,
     AI_API_KEY: 'mock-sim',
     ALLOW_PRIVATE_BASE_URL: '1',
+    // ⚠️ 模拟必须**密封**：本机 .env 的策略开关不能漏进来改判测试结果。
+    // （踩过：开发者 .env 设 ALLOW_SERVER_KEY=0 会经 ...process.env 漏进子进程，
+    //  模拟浏览器没带 Key → 全部查词被拒 → 表现为"等 .entry-card 超时"。）
+    ALLOW_SERVER_KEY: '1',
+    DAILY_JOB_LIMIT: '0',
     DICT_PROVIDER: 'youdao-web',
     DICT_BASE_URL: mocks.dictBaseUrl,
     // 每轮用**全新**的数据目录：查词缓存/任务若跨轮次复用，
