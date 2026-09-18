@@ -48,7 +48,18 @@ export async function pollJob({ jobId, fetchJob, intervalMs, timeoutMs, maxFailu
       try {
         r = await fetchJob(jobId);
         failures = 0;
-      } catch {
+      } catch (e) {
+        /**
+         * 服务端**已经明确答复**的 4xx 不要当网络抖动重试。
+         *
+         * 最典型的是 404「任务不存在或已过期」：服务重启/任务被淘汰之后它就永远不存在了，
+         * 再重试 11 次也只是白等十几秒，最后抛出 netError ——把"任务没了"误报成"网络不稳定"，
+         * 用户于是去检查 WiFi、反复重试同一件事。api.js 早就把 status 与服务端文案带出来了，
+         * 这里直接用原文案，让用户看到真正的原因。
+         * 5xx / 网络层失败仍然照旧重试（那才是真的抖动）。
+         */
+        const status = Number(e && e.status) || 0;
+        if (status >= 400 && status < 500) throw new Error((e && e.message) || netError);
         failures += 1;
         if (failures > maxFailures) throw new Error(netError);
         continue;
@@ -72,14 +83,22 @@ export async function pollJob({ jobId, fetchJob, intervalMs, timeoutMs, maxFailu
  * 参数写错（比如忘了 maxFailures）不会报错，只会表现成"偶尔卡住"。收到这里之后，
  * 调用方只管 submit 什么、拿到 data 做什么。
  *
+ * `jobId`：**已经有任务号时直接用它，不再 submit**。
+ * 查词的流式链路要用这个：流式连不上时它其实已经建好任务了（useLookupStream 会回传 jobId），
+ * 调用方若丢掉那个 id 再 submit 一次，同一个词就会跑两遍模型、花两份钱 ——
+ * 而 hook 的注释明确承诺"同一个 jobId，不重复提交、不重复计费"。弱网/代理拦 SSE 时必中。
+ *
  * @returns {Promise<{data?: any, aborted?: true}>}
  */
-export async function submitAndPoll({ submit, fetchJob, intervalMs, timeoutMs, maxFailures, netError, timeoutError, isAlive, onProgress, onJobId }) {
-  const resp = await submit();
-  const jobId = resp && resp.jobId;
-  // 少数情况服务端会直接同步返回结果（没有任务号）：当作已完成，不再轮询
-  if (!jobId && resp && resp.data) return { data: resp.data };
-  if (!jobId) throw new Error('服务器未返回任务编号，请重试');
+export async function submitAndPoll({ submit, fetchJob, jobId: existingJobId, intervalMs, timeoutMs, maxFailures, netError, timeoutError, isAlive, onProgress, onJobId }) {
+  let jobId = existingJobId;
+  if (!jobId) {
+    const resp = await submit();
+    jobId = resp && resp.jobId;
+    // 少数情况服务端会直接同步返回结果（没有任务号）：当作已完成，不再轮询
+    if (!jobId && resp && resp.data) return { data: resp.data };
+    if (!jobId) throw new Error('服务器未返回任务编号，请重试');
+  }
   if (onJobId) onJobId(jobId);
   return pollJob({ jobId, fetchJob, intervalMs, timeoutMs, maxFailures, netError, timeoutError, isAlive, onProgress });
 }

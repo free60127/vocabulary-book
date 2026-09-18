@@ -133,9 +133,19 @@ export function useBooks({ flash }) {
   );
   /** 错词本清单（带释义与"还在不在本子里"），给界面和"只练错词"用 */
   const wrongItems = useMemo(() => wrongList(wrong, entries, favorites), [wrong, entries, favorites]);
+  /**
+   * 本机快照（云同步 / 备份导出的事实源）。
+   *
+   * ⚠️ 这里**必须把每一个本机数据集都列全**。localSnapshot 对没传的字段一律给空数组，
+   * 而 applyMerged 又用 `merged.x || []` 写回本机 —— 只要漏一个字段，
+   * 就会出现"本机有数据 → 快照里是空 → 合并回来还是空 → 写回把本机清空"的静默数据销毁。
+   * 错句本（sentences）就是这么被漏掉的：函数签名支持它、storage.js 也存它，
+   * 只有这个真实调用点没传，于是**每一次同步成功都会清空本机的错句本**（含批改结果，不可恢复）。
+   * 新增本机数据集时，请同步检查：① 这里传了没 ② applyMerged 有没有兜底 ③ sync.js 推不推。
+   */
   const local = useMemo(
-    () => localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong }),
-    [books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong],
+    () => localSnapshot({ books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong, sentences, deletedSentences }),
+    [books, schedule, days, history, favorites, deletedBooks, deletedEntries, deletedFavorites, killed, revived, wrong, sentences, deletedSentences],
   );
 
   /* ---------- 词条增删改 ---------- */
@@ -419,14 +429,22 @@ export function useBooks({ flash }) {
     flash('已从错句本移除', TIP_NORMAL_MS)
   }, [sentences, deletedSentences, persistSentences, persistDeletedSentences, flash])
 
+  /**
+   * 把"合并结果"写回本机。
+   *
+   * ⚠️ 字段**不在合并结果里**时（undefined）必须保留本机现状，不能当空数组写回。
+   * 云端快照是白名单重建的（server/sync.mjs），本机没推上去的字段（错句本、斩掉、错词本）
+   * 在 remote 里永远是 undefined；一旦这里用 `|| []` 兜底，就等于"每次同步清空一次本机"。
+   * 只有明确拿到数组/对象时才覆盖。
+   */
   const applyMerged = useCallback((merged) => {
     persistBooks(merged.books); persistSchedule(merged.review);
     persistFavorites(merged.favorites || []);
     persistDays(merged.days); persistHistory(merged.history);
     persistDeletedBooks(merged.deletedBooks); persistDeletedEntries(merged.deletedEntries);
     persistDeletedFavorites(merged.deletedFavorites || []);
-    persistSentences(merged.sentences || []);
-    persistDeletedSentences(merged.deletedSentences || []);
+    if (Array.isArray(merged.sentences)) persistSentences(merged.sentences);
+    if (Array.isArray(merged.deletedSentences)) persistDeletedSentences(merged.deletedSentences);
     persistKilled(merged.killed || {}); persistRevived(merged.revived || {});
     persistWrong(merged.wrong || {});
   }, [persistBooks, persistSchedule, persistFavorites, persistDays, persistHistory, persistDeletedBooks, persistDeletedEntries, persistDeletedFavorites, persistSentences, persistDeletedSentences, persistKilled, persistRevived, persistWrong]);

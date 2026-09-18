@@ -53,7 +53,9 @@
           + '<p style="color:#5b6875;margin:0 0 18px">你打开的是 index.html 的源文件，而它需要由本地服务编译后再访问。</p>'
           + '<p style="margin:0 0 8px"><b>正确用法（在项目目录里执行）：</b></p>'
           + '<pre style="background:#10222e;color:#eaf3f8;padding:14px 16px;border-radius:10px;overflow:auto;font-size:13px;line-height:1.8">'
-          + 'cd /d "D:\\vocabulary book"\n'
+          // 这里刻意不写具体盘符/目录名：写死本机路径（曾经是 D:\vocabulary book）的话，
+          // 别人 clone 到别处打开时会照着一条**跑不通**的命令敲，然后以为是项目坏了。
+          + 'cd 到本项目所在的目录\n'
           + 'npm install        # 第一次需要，装依赖\n'
           + 'npm run server     # 启动后端（同时托管前端）\n\n'
           + '然后浏览器打开 http://localhost:8790\n\n'

@@ -331,30 +331,42 @@ function publicJob(job) {
 }
 
 const LOOKUP_CACHE_TTL_SEC = Number(process.env.LOOKUP_CACHE_TTL_SEC || 24 * 3600);
-const lookupCacheKey = (term, level, kindHint, model) => KV_PREFIX + 'lcache:'
-  + [String(term).toLowerCase(), level, kindHint || '', model || ''].join('|');
+/**
+ * 查词缓存键。
+ *
+ * ⚠️ **必须带上解析后的接入点**（baseUrl）。原来只拼 term/level/kindHint/model，
+ * 于是"访客自带 Key + 自定义地址"写下的结果会落在服务端自己那条缓存上：
+ * 下一个用服务端 Key 的正常用户查同一个词，直接命中 `cached: true` 拿到别人塞的内容，
+ * 24 小时内都不会去真调模型（跨用户的内容投毒）。
+ * 这里的 model 字段又是可缺省的（缺省 = 服务端默认模型名），所以攻击者连模型名都不用猜。
+ * 用哈希是为了不把 URL 里的 `/`、`:` 带进键名（文件型 KV 会把它们映射成 `_`，
+ * 不同地址可能撞成同一个文件名）。
+ */
+const endpointTag = (baseUrl) => createHash('sha256').update(String(baseUrl || '')).digest('hex').slice(0, 16);
+const lookupCacheKey = (term, level, kindHint, model, baseUrl) => KV_PREFIX + 'lcache:'
+  + [String(term).toLowerCase(), level, kindHint || '', model || '', endpointTag(baseUrl)].join('|');
 
-async function readLookupCache(term, level, kindHint, model) {
+async function readLookupCache(term, level, kindHint, model, baseUrl) {
   if (!(LOOKUP_CACHE_TTL_SEC > 0)) return null;
   try {
-    const raw = await kv.get(lookupCacheKey(term, level, kindHint, model));
+    const raw = await kv.get(lookupCacheKey(term, level, kindHint, model, baseUrl));
     if (!raw) return null;
     const hit = JSON.parse(raw);
     return hit && hit.entry ? hit : null;
   } catch { return null; }
 }
 
-async function writeLookupCache(term, level, kindHint, model, data) {
+async function writeLookupCache(term, level, kindHint, model, baseUrl, data) {
   if (!(LOOKUP_CACHE_TTL_SEC > 0)) return;
-  try { await kv.set(lookupCacheKey(term, level, kindHint, model), JSON.stringify(data), LOOKUP_CACHE_TTL_SEC); } catch { /* 缓存写失败不影响出结果 */ }
+  try { await kv.set(lookupCacheKey(term, level, kindHint, model, baseUrl), JSON.stringify(data), LOOKUP_CACHE_TTL_SEC); } catch { /* 缓存写失败不影响出结果 */ }
 }
 
 async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, model, apiKey, stream }) {
   const job = await findJob(jobId);
   if (!job) return;
 
-  // 缓存命中 → 秒回（同一词同一档位 24 小时内重复查不再花时间和费用）
-  const cached = await readLookupCache(term, level, kindHint, model);
+  // 缓存命中 → 秒回（同一词同一档位 + **同一接入点** 24 小时内重复查不再花时间和费用）
+  const cached = await readLookupCache(term, level, kindHint, model, baseUrl);
   if (cached) {
     job.data = cached;
     job.status = 'done';
@@ -434,7 +446,7 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
   job.streamIncomplete = Boolean(stream) && !(job.segments || []).some((x) => x && x.t === 'done');
   job.status = 'done';
   job.updatedAt = Date.now();
-  writeLookupCache(term, level, kindHint, model, job.data);
+  writeLookupCache(term, level, kindHint, model, baseUrl, job.data);
   saveJob(job);
 }
 
@@ -683,7 +695,25 @@ const server = http.createServer(async (req, res) => {
   applyCors(req, res);
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-  const url = new URL(req.url, 'http://localhost');
+  /**
+   * ⚠️ new URL() 必须在 try **里面**。
+   *
+   * 它原来在 try 外面，而 `req.url` 是客户端完全可控的原始 request-target：
+   * 一句 `GET http://[ HTTP/1.1` 就能让 new URL 抛 URIError，于是
+   *   ① 这个 async 回调在 try 之前就 reject → 落到 unhandledRejection（日志被刷）；
+   *   ② 更糟的是**没有任何一行代码再碰 res** —— 请求永远不结束、连接也不关，
+   *      一条裸 socket 就能稳定占用一个连接（Node 的 requestTimeout 只管"把请求收完"，
+   *      请求已经收完了，所以不会触发）。实测 3 种畸形 target 全部永久挂起。
+   * 现在解析失败就直接 400 + 断开，绝不把一个已收完的请求悬在那里。
+   */
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', Connection: 'close' });
+    res.end(JSON.stringify({ error: 'bad request path' }));
+    return;
+  }
   const p = url.pathname;
 
   try {
@@ -768,7 +798,6 @@ const server = http.createServer(async (req, res) => {
         });
       }
       // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
-      // 只有**用服务端 Key** 的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
       if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
@@ -867,8 +896,20 @@ const server = http.createServer(async (req, res) => {
       saveJob({ jobId, kind: 'ocr', title: '识别单词表', status: 'pending', createdAt: Date.now(), data: null, error: null });
       safeRun('ocr', jobId, () => runOcrJob(jobId, {
         image,
-        // 识别用**视觉模型**（可与讲解模型不同；日常讲解模型未必支持图片）
-        baseUrl: String(body.visionBaseUrl || '').trim() || stat.visionBaseUrl(),
+        /**
+         * 识别用**视觉模型**（可与讲解模型不同；日常讲解模型未必支持图片）。
+         *
+         * ⚠️ 接入点只取服务端配置，**不接受请求体里的 visionBaseUrl**。
+         * 这里原来写的是 `String(body.visionBaseUrl || '').trim() || stat.visionBaseUrl()`，
+         * 而同一处的 apiKey 是 `ep.apiKey`（不传 body.apiKey 时就是**服务端那份 Key**）——
+         * 两者一组合，任何人匿名发一个请求就能让服务器带着自己的 Key 去访问任意地址。
+         * 实测 PoC：受害机向攻击者地址发出了 `Authorization: Bearer <服务端 Key>`，
+         * 且上游响应正文还会经任务错误回显回来（SSRF 全读）。
+         * 其余 6 个路由都走 resolveEndpoint（自定义地址必须自带 Key + 禁私网），只有这里漏了。
+         * 前端从来不发这个字段（只发 visionModel），所以直接删掉，不留"看起来能用"的入口。
+         * 要换识别接入点，请改服务端 .env 的 AI_VISION_BASE_URL。
+         */
+        baseUrl: stat.visionBaseUrl(),
         model: String(body.visionModel || '').trim() || stat.visionModel() || stat.model(),
         apiKey: ep.apiKey,
       }));
@@ -879,18 +920,31 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/quiz' && req.method === 'POST') {
       if (rateLimited(req)) return json(res, 429, { error: '请求过于频繁，请稍后再试' });
       const body = await readBody(req, 256 * 1024);
-      const epQuiz = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
-      if (!epQuiz.error && !epQuiz.visitorKey) {
-        const b = await budget.spend();
-        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
-      }
+      /**
+       * ⚠️ 顺序：**先校验参数、再扣额度**。
+       * 原来是先 budget.spend() 再校验 points，于是一个 `{"points":[]}` 的空请求
+       * （完全不调模型、不花钱）就能把当天的额度扣掉一次 —— 实测 DAILY_JOB_LIMIT=1 时
+       * 第一条空请求返回 429，紧接着的**合法**请求也一起被拒。
+       * 配了 DAILY_JOB_LIMIT 的部署，别人发 N 个空请求即可让全站当天不可用（零成本 DoS）。
+       * 这里也顺手把重复的 resolveEndpoint 合成一次（原来解析两遍，自定义地址要做两次 DNS）。
+       */
       const points = (Array.isArray(body.points) ? body.points : [])
         .map((x) => String(x || '').trim()).filter(Boolean).slice(0, 60);
       if (!points.length) return json(res, 400, { error: '请先选择要出题的词条' });
       const count = Math.max(1, Math.min(50, Number(body.count) || 10));
       const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
       if (ep.error) return json(res, 400, { error: ep.error });
-      if (!ep.apiKey) return json(res, 400, { error: '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key' });
+      if (!ep.apiKey) {
+        return json(res, 400, {
+          error: ALLOW_SERVER_KEY
+            ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+            : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
+        });
+      }
+      if (!ep.visitorKey) {
+        const b = await budget.spend();
+        if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+      }
 
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'quiz', title: '自测题 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
@@ -944,6 +998,20 @@ const server = http.createServer(async (req, res) => {
       if (rateLimited(req, mode === 'grade' ? 'grade' : undefined)) {
         return json(res, 429, { error: mode === 'grade' ? '批改得太快了，缓一缓' : '请求过于频繁，请稍后再试' });
       }
+      /**
+       * ⚠️ 参数校验必须排在 budget.spend() **之前**（与 /api/quiz 同一条坑）：
+       * 空请求不调模型、不花钱，却能扣掉一次当日额度 —— 反复发就能零成本耗尽全站配额。
+       * 两个分支的参数先在这里收口，下面再解析接入点、扣额度。
+       */
+      const points = mode === 'make'
+        ? (Array.isArray(body.points) ? body.points : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 30)
+        : [];
+      if (mode === 'make' && !points.length) return json(res, 400, { error: '还没有词条可以出题 —— 先查几个词' });
+      const head = mode === 'grade' ? String(body.head || '').trim().slice(0, 200) : '';
+      const sentence = mode === 'grade' ? String(body.sentence || '').trim().slice(0, 1000) : '';
+      if (mode === 'grade' && !head) return json(res, 400, { error: '缺少要练习的词' });
+      if (mode === 'grade' && !sentence) return json(res, 400, { error: '先写下你的句子再提交' });
+
       const ep = await resolveEndpoint({ bodyBase: body.baseUrl, bodyKey: body.apiKey, fallbackBase: stat.baseUrl(), fallbackKey: envKey() });
       if (ep.error) return json(res, 400, { error: ep.error });
       if (!ep.apiKey) {
@@ -959,9 +1027,6 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (mode === 'make') {
-        const points = (Array.isArray(body.points) ? body.points : [])
-          .map((x) => String(x || '').trim()).filter(Boolean).slice(0, 30);
-        if (!points.length) return json(res, 400, { error: '还没有词条可以出题 —— 先查几个词' });
         const count = Math.max(1, Math.min(20, Number(body.count) || 5));
         const jobId = randomUUID();
         saveJob({ jobId, kind: 'sentence', title: '造句练习 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
@@ -972,10 +1037,6 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, jobId, status: 'pending' });
       }
 
-      const head = String(body.head || '').trim().slice(0, 200);
-      const sentence = String(body.sentence || '').trim().slice(0, 1000);
-      if (!head) return json(res, 400, { error: '缺少要练习的词' });
-      if (!sentence) return json(res, 400, { error: '先写下你的句子再提交' });
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'sentence', title: head + ' · 批改', status: 'pending', createdAt: Date.now(), data: null, error: null });
       safeRun('sentence', jobId, () => runSentenceJob(jobId, {

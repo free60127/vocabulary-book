@@ -28,7 +28,13 @@ export default function KilledModal({ items, onClose, onRevive, onReviveAll }) {
           <>
             <ul className="killed-list">
               {items.map((it) => (
-                <li key={it.key} className="killed-row">
+                /**
+                 * key 兜底到 head：本组件真正渲染的是 head / meaning，`key` 只是调用方
+                 * （App.jsx 的 killedList）顺手带上的规范化词头。调用方要是只给了 head
+                 * （测试就是这么传的），`key={undefined}` 会让 React 报"列表缺少唯一 key"，
+                 * 而那条警告会淹没真正有用的警告。head 在同一份清单里本就唯一，兜底是安全的。
+                 */
+                <li key={it.key || it.head} className="killed-row">
                   <Skull size={13} className="killed-icon" />
                   <span className="killed-head">{it.head}</span>
                   {it.meaning ? <span className="muted small killed-meaning">{it.meaning}</span> : null}

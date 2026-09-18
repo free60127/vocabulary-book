@@ -155,6 +155,57 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
     if (Number(s.epoch) !== Number(u.sessionEpoch)) return null; // 已被改密/重置踢下线
     return u;
   }
+
+  /**
+   * 用户记录的「读-改-写」必须串行化 —— 这是**并发覆盖**的根因。
+   *
+   * 原来每个写路径都是：`sessionUser()` 拿到一份用户对象 → 在内存里改几个字段 →
+   * 整条 `kv.set(K_USER(id), ...)` 写回去。两个请求并发时，后写的那份会把先写的改动
+   * **整条盖掉**（因为写的是完整对象，不是字段）。最危险的一组是：
+   *   · 设备1 改密码（写新的 passwordHash）
+   *   · 设备2（或被窃令牌方）同时 logout-all（读到的还是旧记录，写回时把**旧密码**一起带回去）
+   * 结果就是"改密被静默撤销"，用户以为已经踢掉了攻击者，实际密码还是旧的。
+   * 云同步那边专门做了 CAS（server/sync.mjs），账号这边当时漏了。
+   *
+   * 这里用 KV 已有的原子原语 `setNx` 做短锁（与 sync.mjs 在 EVAL 不可用时的兜底同一套做法）：
+   * 锁只在"读→改→写"这几毫秒里持有，带 5 秒 TTL 防进程崩溃后死锁。
+   * 抢不到锁宁可返回 503，**也绝不拿着旧数据写回去** —— 这正是要消灭的行为。
+   */
+  const K_LOCK = (id) => PREFIX + 'lock:user:' + id;
+  async function withUserLock(id, fn) {
+    const lockKey = K_LOCK(id);
+    for (let i = 0; i < 40; i += 1) {
+      const got = await kv.setNx(lockKey, String(Date.now()), 5);
+      if (got) {
+        try { return await fn(); } finally { await kv.del(lockKey).catch(() => {}); }
+      }
+      await new Promise((r) => setTimeout(r, 10 + i * 5));
+    }
+    return { ok: false, status: 503, error: '操作太频繁，请稍后重试' };
+  }
+
+  /**
+   * 「带着有效会话进锁」—— 会话校验放在锁**里面**、基于刚读到的用户记录。
+   * 不能在锁外先 sessionUser() 再进锁：那份对象在进锁时可能已经过期
+   * （比如并发发生了改密，世代号已经 +1），拿它做判断等于把失效的会话放进来。
+   */
+  async function withSession(token, fn) {
+    if (!token) return { ok: false, status: 401, error: 'unauthorized' };
+    const s = readJson(await kv.get(K_SESS(sha256Hex(token))));
+    if (!s || !s.userId) return { ok: false, status: 401, error: 'unauthorized' };
+    return withUserLock(s.userId, async () => {
+      const u = await loadUserById(s.userId);
+      if (!u) return { ok: false, status: 401, error: 'unauthorized' };
+      if (Number(s.epoch) !== Number(u.sessionEpoch)) return { ok: false, status: 401, error: 'unauthorized' };
+      return fn(u);
+    });
+  }
+  /** 把改好的用户写回去（锁内调用） */
+  async function saveUser(u) {
+    u.updatedAt = Date.now();
+    await kv.set(K_USER(u.id), JSON.stringify(u));
+    return u;
+  }
   /** 签发新会话 */
   async function issueSession(user, device = '') {
     const token = newToken();
@@ -250,14 +301,16 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
      * 用途：怀疑令牌泄露时的一键止血。不必改密码 —— 因为「会话失效」本来就靠世代号实现，
      * 把它 +1 就行，所有已签发的会话下一次校验就全部作废。
      * 客户端拿到成功响应后应当清掉本地令牌（它自己也失效了）。
+     *
+     * ⚠️ 必须在锁内改（见 withUserLock 的说明）：它与「改密码」写的是同一条用户记录，
+     * 并发时后写的那份会把前一份的改动整条盖掉 —— 实测过的后果就是改密被静默撤销。
      */
     async logoutAll(token) {
-      const u = await sessionUser(token);
-      if (!u) return { ok: false, status: 401, error: 'unauthorized' };
-      u.sessionEpoch = Number(u.sessionEpoch) + 1;
-      u.updatedAt = Date.now();
-      await kv.set(K_USER(u.id), JSON.stringify(u));
-      return { ok: true, status: 200 };
+      return withSession(token, async (u) => {
+        u.sessionEpoch = Number(u.sessionEpoch) + 1;
+        await saveUser(u);
+        return { ok: true, status: 200 };
+      });
     },
 
     async me(token) {
@@ -268,56 +321,55 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
 
     /* ---------- 绑定 / 更新同步码保险箱 ---------- */
     async setSync(token, sync) {
-      const u = await sessionUser(token);
-      if (!u) return { ok: false, status: 401, error: 'unauthorized' };
       const s = sanitizeSync(sync);
       if (s === undefined) return { ok: false, status: 400, error: '同步码密文格式不正确' };
-      u.syncEnc = s;
-      u.updatedAt = Date.now();
-      await kv.set(K_USER(u.id), JSON.stringify(u));
-      return { ok: true, status: 200 };
+      return withSession(token, async (u) => {
+        u.syncEnc = s;
+        await saveUser(u);
+        return { ok: true, status: 200 };
+      });
     },
 
     /* ---------- 改密码 ----------
      * 客户端必须同时提交「用新密码重新加密的同步码」——
      * 服务端没有旧密码，代劳不了。没提交就沿用旧的（会解不开，所以前端必须传）。 */
     async changePassword(token, { oldPassword, newPassword, sync }) {
-      const u = await sessionUser(token);
-      if (!u) return { ok: false, status: 401, error: 'unauthorized' };
       const err = newPasswordError(newPassword);
       if (err) return { ok: false, status: 400, error: err };
       if (!oldPassword) return { ok: false, status: 400, error: '请输入当前密码' };
-      if (!(await verifyHash(String(oldPassword), u.passwordHash))) {
-        return { ok: false, status: 401, error: '当前密码不正确' };
-      }
       const s = sanitizeSync(sync);
       if (s === undefined) return { ok: false, status: 400, error: '同步码密文格式不正确' };
 
-      u.passwordHash = await makeHash(String(newPassword));
-      if (s) u.syncEnc = s;
-      u.sessionEpoch = Number(u.sessionEpoch) + 1; // 世代号 +1 → 所有旧会话失效
-      u.updatedAt = Date.now();
-      await kv.set(K_USER(u.id), JSON.stringify(u));
+      return withSession(token, async (u) => {
+        // 校验放在锁内：拿锁外的旧记录去验旧密码，等于允许"改密与改密并发"互相覆盖
+        if (!(await verifyHash(String(oldPassword), u.passwordHash))) {
+          return { ok: false, status: 401, error: '当前密码不正确' };
+        }
+        u.passwordHash = await makeHash(String(newPassword));
+        if (s) u.syncEnc = s;
+        u.sessionEpoch = Number(u.sessionEpoch) + 1; // 世代号 +1 → 所有旧会话失效
+        await saveUser(u);
 
-      await kv.del(K_SESS(sha256Hex(token)));     // 当前这条也过期了，换一条新的
-      const fresh = await issueSession(u);
-      return { ok: true, status: 200, token: fresh, user: publicUser(u), sync: u.syncEnc || null };
+        await kv.del(K_SESS(sha256Hex(token)));     // 当前这条也过期了，换一条新的
+        const fresh = await issueSession(u);
+        return { ok: true, status: 200, token: fresh, user: publicUser(u), sync: u.syncEnc || null };
+      });
     },
 
     /* ---------- 注销账号 ----------
      * 只删账号侧数据。云端同步快照在同步服务那边，服务端拿不到同步码（它是加密的），删不了 ——
      * 客户端应在注销前自行调 /api/sync 清空，或保留（那是用户自己攒的学习数据）。 */
     async deleteAccount(token, { password }) {
-      const u = await sessionUser(token);
-      if (!u) return { ok: false, status: 401, error: 'unauthorized' };
-      if (!(await verifyHash(String(password || ''), u.passwordHash))) {
-        return { ok: false, status: 401, error: '密码不正确，无法注销' };
-      }
-      await kv.del(K_USER(u.id));
-      await kv.del(K_EMAIL(u.email));
-      await kv.del(K_FAIL(u.email));
-      // 会话不用遍历删：用户没了，sessionUser() 自然查不到
-      return { ok: true, status: 200 };
+      return withSession(token, async (u) => {
+        if (!(await verifyHash(String(password || ''), u.passwordHash))) {
+          return { ok: false, status: 401, error: '密码不正确，无法注销' };
+        }
+        await kv.del(K_USER(u.id));
+        await kv.del(K_EMAIL(u.email));
+        await kv.del(K_FAIL(u.email));
+        // 会话不用遍历删：用户没了，sessionUser() 自然查不到
+        return { ok: true, status: 200 };
+      });
     },
 
     /* ---------- 找回密码第 1 步：发验证码 ---------- */
@@ -393,21 +445,33 @@ export function createAccounts({ kv, mail, env = process.env, sent, prefix }) {
         return { ok: false, status: 400, error: '验证码不正确' };
       }
 
-      const user = await loadUserByEmail(e);
-      if (!user) return { ok: false, status: 404, error: '账号不存在' };
+      const found = await loadUserByEmail(e);
+      if (!found) return { ok: false, status: 404, error: '账号不存在' };
 
       const s = sanitizeSync(sync);
       if (s === undefined) return { ok: false, status: 400, error: '同步码密文格式不正确' };
 
-      user.passwordHash = await makeHash(String(newPassword));
-      // 重置时没有旧密码 → 旧同步码解不开，只能清掉（前端可传新密码加密的那份）
-      user.syncEnc = s || null;
-      user.sessionEpoch = Number(user.sessionEpoch) + 1; // 全部旧会话失效
-      user.updatedAt = Date.now();
-      await kv.set(K_USER(user.id), JSON.stringify(user));
-      await kv.del(K_RESET(e)); // 一次性：用完立刻删，重放必失败
+      /**
+       * 与「改密码」同一条写路径，同样要在锁内改（否则并发时会互相整条覆盖）。
+       * 锁内重新读一次用户：外面的 found 只是用来确认账号存在，不能拿它直接写回去。
+       */
+      return withUserLock(found.id, async () => {
+        // 验证码是一次性的：锁内再确认一次还在，避免两个并发请求都拿同一个码重置
+        const still = readJson(await kv.get(K_RESET(e)));
+        if (!still || still.h !== rec.h) return { ok: false, status: 400, error: '验证码已使用，请重新获取' };
 
-      return { ok: true, status: 200 };
+        const user = await loadUserById(found.id);
+        if (!user) return { ok: false, status: 404, error: '账号不存在' };
+
+        user.passwordHash = await makeHash(String(newPassword));
+        // 重置时没有旧密码 → 旧同步码解不开，只能清掉（前端可传新密码加密的那份）
+        user.syncEnc = s || null;
+        user.sessionEpoch = Number(user.sessionEpoch) + 1; // 全部旧会话失效
+        await saveUser(user);
+        await kv.del(K_RESET(e)); // 一次性：用完立刻删，重放必失败
+
+        return { ok: true, status: 200 };
+      });
     },
 
     /** 清理接口（可选）：删除某邮箱的失败计数，客服兜底用 */
