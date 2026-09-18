@@ -29,7 +29,7 @@ const FIRST_SEGMENT_TIMEOUT_MS = 6000;
  *    服务端每 15s 发 SSE 注释心跳，注释不触发前端事件——正好：传输活着但生成停了也算"停顿"。
  *  · TOTAL：全程 150s 封顶（服务端流式超时是 6 分钟，等不了那么久）。
  * 回退后调用方用同一个 jobId 走轮询把剩余内容等完，一分钱不多花。 */
-const STALL_TIMEOUT_MS = 30000;
+const STALL_TIMEOUT_MS = 45000;   // 45s：推理型模型段间停顿经常超过 30s，太紧会把正常生成误切成轮询
 const TOTAL_STREAM_MS = 150000;
 
 export function useLookupStream({ aliveRef } = {}) {

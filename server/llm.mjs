@@ -76,6 +76,11 @@ export function createLlm({ allowServerKey = true } = {}) {
     if (first >= 0xfc00 && first <= 0xfdff) return true;  // fc00::/7 唯一本地
     if (first >= 0xfe80 && first <= 0xfebf) return true;  // fe80::/10 链路本地
     if ((first & 0xff00) === 0xff00) return true;         // ff00::/8 组播
+    if (first >= 0xfec0 && first <= 0xfeff) return true;  // fec0::/10 站点本地（已废弃，仍按内网拦）
+    const asV4 = (hi, lo) => isPrivateIp4([(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255].join('.'));
+    // 64:ff9b::/96（NAT64）与 2002::/16（6to4）：内嵌 IPv4 是私网地址即视为内网目标
+    if (g[0] === '0064' && g[1] === 'ff9b' && g.slice(2, 6).every((x) => x === '0000')) return asV4(parseInt(g[6], 16), parseInt(g[7], 16));
+    if (first === 0x2002) return asV4(parseInt(g[1], 16), parseInt(g[2], 16));
     return false;
   }
   /** 把任意合法写法的 IPv6 展开（zone 已剥离）；畸形返回 null */

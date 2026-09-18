@@ -16,7 +16,10 @@ export function watchVisualViewportHeight() {
     const vv = window.visualViewport;
     if (!vv || !document.documentElement) return undefined;
     const update = () => {
-      document.documentElement.style.setProperty('--vvh', Math.round(vv.height) + 'px');
+      const h = Math.round(vv.height);
+      if (h <= 200) return;   // 异常 WebView 首帧可能报 0；200px 以下不可能是合法可视区
+      if (vv.scale > 1.2) return;   // 双指缩放中：可视区变小是缩放造成的，不该让弹窗跟着跳
+      document.documentElement.style.setProperty('--vvh', h + 'px');
     };
     update();
     vv.addEventListener('resize', update);

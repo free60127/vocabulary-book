@@ -100,7 +100,7 @@ const rateBuckets = new Map();
    可以用一排连接把它占满（之前这块连限流都没接）。按 IP 最多 3 条 + 全局 64 条。 */
 const sseStreamsByIp = new Map();
 let sseStreamsTotal = 0;
-const SSE_PER_IP = 3;
+const SSE_PER_IP = 5;   // 办公室/校园/CGNAT 常是几十人共享一个出口 IP，3 条不够用（超限方静默退回轮询，功能不断但体验降级）
 const SSE_GLOBAL_MAX = 64;
 const posInt = (raw, fallback) => {
   const n = Number(raw);

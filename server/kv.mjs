@@ -66,6 +66,10 @@ export function createUpstashKv({ url, token }) {
 export function createFileKv(dir) {
   const ensure = () => fs.mkdirSync(dir, { recursive: true });
   ensure();
+  // 启动时清掉上次崩溃留下的 .tmp 孤儿（原子写中断的残留；单实例部署，启动期清理安全）
+  try {
+    for (const n of fs.readdirSync(dir)) if (n.includes('.tmp-')) fs.unlinkSync(path.join(dir, n));
+  } catch { /* 清理失败不影响使用 */ }
   const fileOf = (key) => path.join(dir, String(key).replace(/[^A-Za-z0-9._-]/g, '_') + '.json');
   const readEnv = (f) => {
     try {

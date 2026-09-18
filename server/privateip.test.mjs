@@ -40,6 +40,14 @@ const priv6 = [
 ];
 for (const ip of priv6) check(`私网/非法 IPv6 必须拦：${ip}`, isPrivateIp(ip) === true);
 
+// NAT64 / 6to4 / fec0（新补的判定：内嵌 IPv4 是私网即拦）
+const natCases = [
+  ['64:ff9b::7f00:1', true], ['64:ff9b::c0a8:1', true], ['64:ff9b::808:808', false],
+  ['fec0::1', true], ['fec0:1234::1', true],
+  ['2002:7f00:1::', true], ['2002:c0a8:101::1', true], ['2002:808:808::1', false],
+];
+for (const [ip, want] of natCases) check(`NAT64/6to4/fec0 判定：${ip} → ${want}`, isPrivateIp(ip) === want);
+
 const pub6 = [
   '::ffff:8.8.8.8',                           // 映射公网
   '0:0:0:0:0:ffff:808:808',                   // 映射公网全展开（8.8.8.8）
