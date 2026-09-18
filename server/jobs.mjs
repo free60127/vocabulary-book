@@ -101,16 +101,22 @@ export function createJobStore({ kv, prefix, ttlSec, max, slots }) {
     if (mem) { apply(mem); return undefined; }
     return Promise.resolve().then(() => findJob(jobId)).then(apply).catch(() => {});
   }
-  function safeRun(name, jobId, fn) {
+  /**
+   * refund：路由在 budget.spend() 成功后把它带回这里；任务失败（模型报错/超时/排队满）
+   * 时回冲当日额度 —— 扣费在提交时、成败在任务里，不回冲的话失败的请求也白扣一次。
+   */
+  function safeRun(name, jobId, refund, fn) {
     return slots.acquireJobSlot().then((got) => {
       if (!got) {
         const busy = new Error('服务器正忙（同时在跑的任务已达上限），请过一会儿再试 —— 这次没有调用模型，不产生费用。');
         busy.userFacing = true;
+        if (typeof refund === 'function') { try { refund(); } catch { /* 回冲失败不影响报错 */ } }
         return markJobFailed(jobId, busy);
       }
       return Promise.resolve().then(fn)
         .catch((e) => {
           console.error('[job] ' + name + ' 异常:', jobId, (e && e.stack) || e);
+          if (typeof refund === 'function') { try { refund(); } catch { /* 回冲失败不影响报错 */ } }
           return markJobFailed(jobId, e);
         })
         .finally(slots.releaseJobSlot);

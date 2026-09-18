@@ -105,8 +105,14 @@ export async function pullSyncCode(token, password) {
 
 /** 把当前同步码加密后存进账号（换设备/首次绑定时用）。密码必须是**账号密码** */
 export async function bindSyncCode(token, syncCode, password) {
+  if (!syncCode) return { ok: false, error: '没有可绑定的同步码' };
+  // 非 https（手机访问局域网 IP 调试是典型）时 WebCrypto 不存在，加密必然失败 ——
+  // 原先统一报"没有可绑定的同步码"，与事实不符（码明明有，是环境不支持）。
+  if (typeof isSecureContext !== 'undefined' && !isSecureContext) {
+    return { ok: false, error: '当前页面不是 HTTPS，浏览器不允许加密（WebCrypto 不可用）—— 请用 https 或 localhost 打开后再绑定' };
+  }
   const box = await sealSync(syncCode, password);
-  if (!box) return { ok: false, error: '没有可绑定的同步码' };
+  if (!box) return { ok: false, error: '同步码加密失败（浏览器不支持 WebCrypto），无法绑定' };
   return call('sync', { sync: box }, token);
 }
 

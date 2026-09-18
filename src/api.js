@@ -21,7 +21,11 @@ async function api(path, opts = {}, timeoutMs = TIMEOUT.normal) {
   } catch (e) {
     clearTimeout(timer);
     if (e && e.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
-    throw new Error('无法连接服务器（请确认后端已启动：npm run server）');
+    // 文案按环境分流：localhost 上提示起后端是自助排查；线上访客看到 npm 命令只会困惑
+    const local = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+    throw new Error(local
+      ? '无法连接服务器（请确认后端已启动：npm run server）'
+      : '网络连接失败，请检查网络后重试');
   } finally {
     clearTimeout(timer);
   }

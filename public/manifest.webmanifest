@@ -4,6 +4,7 @@
   "description": "查一个词就得到完整讲解：词性、褒贬、情感强度、词根词缀、使用场景、助记、近义词对比与例句；存进单词本，按间隔重复安排每日复习。",
   "lang": "zh-CN",
   "start_url": "./",
+  "id": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#10222e",

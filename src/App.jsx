@@ -197,6 +197,14 @@ export default function App() {
   useEscape(() => setWrongOpen(false), wrongOpen)
 
   useEffect(() => { safeSet('vb-level', level) }, [level])
+  /* 本机存储写失败（配额满 / 隐私模式禁写）→ 醒目提示一次性的话：
+      safeSet 们原先把失败静默吞掉，用户以为已保存，关浏览器数据就没了。
+      只提示不阻断 —— 学习数据本身还在内存里，本次会话仍可用。 */
+  useEffect(() => {
+    const onStorageError = () => flash('本机存储空间不足或被禁用：最新的改动可能没保存 —— 请先「备份/同步 → 导出备份」，并清理浏览器存储', TIP_LONG_MS)
+    window.addEventListener('vb-storage-error', onStorageError)
+    return () => window.removeEventListener('vb-storage-error', onStorageError)
+  }, [flash])
   /* 主题：写 <html data-theme>；选"跟随系统"时，系统主题变了要立刻跟上 */
   useEffect(() => {
     saveTheme(theme)

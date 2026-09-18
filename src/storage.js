@@ -51,7 +51,12 @@ export function safeGet(key, fallback = '') {
   } catch { return fallback; }
 }
 export function safeSet(key, value) {
-  try { localStorage.setItem(key, value); return true; } catch { return false; }
+  try { localStorage.setItem(key, value); return true; } catch {
+    // 配额满 / 隐私模式禁写：静默丢数据的代价是"用户以为已保存"。广播出去，
+    // App.jsx 监听这个事件给一句醒目提示（导出备份是唯一出路）。
+    try { window.dispatchEvent(new CustomEvent('vb-storage-error')); } catch { /* 忽略 */ }
+    return false;
+  }
 }
 
 const parseArray = (raw) => {

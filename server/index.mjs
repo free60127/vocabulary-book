@@ -92,6 +92,12 @@ const clientIp = (req) => resolveClientIp({
 const RATE_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 30);
 const RATE_WINDOW_MS = 60_000;
 const rateBuckets = new Map();
+/* SSE 并发护栏：一条流最长挂 6 分钟、每 400ms 轮一次内存 —— 无上限的话恶意客户端
+   可以用一排连接把它占满（之前这块连限流都没接）。按 IP 最多 3 条 + 全局 64 条。 */
+const sseStreamsByIp = new Map();
+let sseStreamsTotal = 0;
+const SSE_PER_IP = 3;
+const SSE_GLOBAL_MAX = 64;
 const posInt = (raw, fallback) => {
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 && String(raw ?? '').trim() !== '' ? Math.floor(n) : fallback;
@@ -603,6 +609,11 @@ function json(res, code, obj) {
 }
 /** 读请求体；超限时先把剩余数据排空再回 413，避免连接状态错乱 */
 async function readBody(req, maxBytes = MAX_BODY_BYTES) {
+  // 显式声明了非 JSON 的 Content-Type 就直接拒（415）：省得解析失败后给出误导性的
+  // "JSON 格式不正确"—— 调试工具/爬虫发表单或空类型时能立刻看懂被拒的原因。
+  // 不带 Content-Type 的放行（自家前端一直带；curl 不带头也常见）。
+  const ct = String(req.headers['content-type'] || '').toLowerCase();
+  if (ct && !ct.includes('json')) throw new HttpError(415, 'Content-Type 必须是 application/json');
   const chunks = [];
   let size = 0;
   let tooLarge = false;
@@ -650,7 +661,9 @@ function serveStatic(res, pathname) {
   catch { return json(res, 400, { error: 'bad request path' }); }
   let file = path.normalize(path.join(DIST, decoded));
   if (!insideDist(file)) return json(res, 403, { error: 'forbidden' });
-  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+  let st = null;
+  try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'not found' }); }
+  if (st.isDirectory()) {
     // SPA 回落只对"看起来像页面路径"的请求生效。带扩展名的路径（`/.env`、`/x.json`）
     // 是**静态资源**请求，回落成 index.html 会给出一个 200 —— 扫描器看到 200 会以为命中，
     // 排查问题时也容易被这个假 200 带偏。本项目没有前端路由，不会因此丢链接。
@@ -825,9 +838,11 @@ const server = http.createServer(async (req, res) => {
         });
       }
       // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱，不该被卡
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
 
       const jobId = randomUUID();
@@ -835,7 +850,7 @@ const server = http.createServer(async (req, res) => {
       // （线上真实事故：查"羽毛球"时词头是中文，音标却是 /ˈbædmɪntən/，自相矛盾）
       if (body.zh === true) {
         saveJob({ jobId, kind: 'lookup', title: term + ' · 找对应词', status: 'pending', createdAt: Date.now(), data: null, error: null });
-        safeRun('lookup', jobId, () => runZhJob(jobId, {
+        safeRun('lookup', jobId, refund, () => runZhJob(jobId, {
           term,
           level: normalizeLevel(body.level),
           baseUrl: ep.baseUrl,
@@ -845,7 +860,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, jobId, status: 'pending' });
       }
       saveJob({ jobId, kind: 'lookup', title: term, status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('lookup', jobId, () => runLookupJob(jobId, {
+      safeRun('lookup', jobId, refund, () => runLookupJob(jobId, {
         term,
         kindHint: String(body.kindHint || '').slice(0, 20),
         context: String(body.context || '').slice(0, 600),
@@ -879,13 +894,15 @@ const server = http.createServer(async (req, res) => {
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'quizgrade', title: '批改自测题', status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('quizgrade', jobId, () => runQuizGradeJob(jobId, {
+      safeRun('quizgrade', jobId, refund, () => runQuizGradeJob(jobId, {
         items,
         level: normalizeLevel(body.level),
         baseUrl: ep.baseUrl,
@@ -915,13 +932,15 @@ const server = http.createServer(async (req, res) => {
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'ocr', title: '识别单词表', status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('ocr', jobId, () => runOcrJob(jobId, {
+      safeRun('ocr', jobId, refund, () => runOcrJob(jobId, {
         image,
         /**
          * 识别用**视觉模型**（可与讲解模型不同；日常讲解模型未必支持图片）。
@@ -968,14 +987,16 @@ const server = http.createServer(async (req, res) => {
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
 
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'quiz', title: '自测题 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('quiz', jobId, () => runQuizJob(jobId, {
+      safeRun('quiz', jobId, refund, () => runQuizJob(jobId, {
         points, count, level: normalizeLevel(body.level),
         baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
       }));
@@ -1000,13 +1021,15 @@ const server = http.createServer(async (req, res) => {
         });
       }
       // 只有**用服务端 Key**的请求才占每日额度：访客自带 Key 花的是他自己的钱
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'followup', title: head + ' · 追问', status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('followup', jobId, () => runFollowupJob(jobId, {
+      safeRun('followup', jobId, refund, () => runFollowupJob(jobId, {
         head,
         brief: String(body.brief || '').slice(0, 600),
         pos: String(body.pos || '').slice(0, 60),
@@ -1048,16 +1071,18 @@ const server = http.createServer(async (req, res) => {
             : '本站不提供公共 Key：请在「AI 设置」里填入你自己的 API Key（只存在你自己的浏览器里，站长看不到）',
         });
       }
-      if (!ep.visitorKey) {
+            let refund = null;
+if (!ep.visitorKey) {
         const b = await budget.spend();
         if (!b.ok) return json(res, 429, { error: budgetMessage(b.used, b.limit) });
+        refund = b.refund;
       }
 
       if (mode === 'make') {
         const count = Math.max(1, Math.min(20, Number(body.count) || 5));
         const jobId = randomUUID();
         saveJob({ jobId, kind: 'sentence', title: '造句练习 · ' + count + ' 题', status: 'pending', createdAt: Date.now(), data: null, error: null });
-        safeRun('sentence', jobId, () => runSentenceJob(jobId, {
+        safeRun('sentence', jobId, refund, () => runSentenceJob(jobId, {
           mode: 'make', points, count, level: normalizeLevel(body.level), difficulty: normalizeDifficulty(body.difficulty),
           baseUrl: ep.baseUrl, model: String(body.model || '').trim() || stat.model(), apiKey: ep.apiKey,
         }));
@@ -1066,7 +1091,7 @@ const server = http.createServer(async (req, res) => {
 
       const jobId = randomUUID();
       saveJob({ jobId, kind: 'sentence', title: head + ' · 批改', status: 'pending', createdAt: Date.now(), data: null, error: null });
-      safeRun('sentence', jobId, () => runSentenceJob(jobId, {
+      safeRun('sentence', jobId, refund, () => runSentenceJob(jobId, {
         mode: 'grade', head,
         brief: String(body.brief || '').slice(0, 600),
         pos: String(body.pos || '').slice(0, 60),
@@ -1086,6 +1111,13 @@ const server = http.createServer(async (req, res) => {
      * 保证"看到的"和"存下来的"是同一个东西。 */
     const streamMatch = p.match(/^\/api\/lookup\/([A-Za-z0-9-]{8,64})\/stream$/);
     if (streamMatch && req.method === 'GET') {
+      const sseIp = clientIp(req);
+      const ipCount = sseStreamsByIp.get(sseIp) || 0;
+      if (ipCount >= SSE_PER_IP || sseStreamsTotal >= SSE_GLOBAL_MAX) {
+        return json(res, 429, { error: '当前连接数过多，请稍后再试' });
+      }
+      sseStreamsByIp.set(sseIp, ipCount + 1);
+      sseStreamsTotal += 1;
       const jobId = streamMatch[1];
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -1133,9 +1165,13 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         if (!closed) send('error', { error: String((e && e.message) || e) });
       } finally {
-        clearInterval(heartbeat);
+
+clearInterval(heartbeat);
+        const left = (sseStreamsByIp.get(sseIp) || 1) - 1;
+        if (left <= 0) sseStreamsByIp.delete(sseIp); else sseStreamsByIp.set(sseIp, left);
+        sseStreamsTotal -= 1;
         if (!closed) res.end();
-      }
+}
       return undefined;
     }
 

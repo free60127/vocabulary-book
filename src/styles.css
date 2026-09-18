@@ -142,6 +142,9 @@ body.drawer-open { overflow: hidden; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .icon-btn { border-radius: 8px; padding: 6px; color: var(--muted); }
 .icon-btn:hover { background: var(--hover); }
+/* 破坏性图标键（错句本删除等）：必须和普通图标键一眼区分开，否则极易误触 */
+.icon-btn.danger { color: var(--err-ink); }
+.icon-btn.danger:hover { background: var(--err-bg); border-color: var(--err-line); }
 
 @media screen and (max-width: 900px) {
   /* iOS「添加到主屏」后是全屏运行：配合 index.html 的 black-translucent，
@@ -276,7 +279,7 @@ body.drawer-open { overflow: hidden; }
 .fav-modal { width: 720px; }
 .fav-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
 .fav-search { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
-.fav-list { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.fav-list { max-height: min(52vh, 52dvh); overflow: auto; display: flex; flex-direction: column; gap: 8px; }
 .fav-item { border: 1px solid var(--line); border-left: 4px solid var(--gold); border-radius: 10px; padding: 9px 11px; background: var(--fill-2); }
 .fav-item-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
 .fav-kind { font-size: 11px; background: #eef2fb; color: var(--blue); border-radius: 999px; padding: 2px 8px; }
@@ -697,9 +700,13 @@ body.drawer-open { overflow: hidden; }
 /* ---------- 收藏夹 ---------- */
 .fav-side-title { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .fav-side-title .ghost-btn { padding: 2px 8px; min-height: 0; font-size: 11px; }
+@media (pointer: coarse) {
+  /* 触屏上 22px 的行内按钮点不中（44px 标准）—— 用负边距撑热区，不撑大视觉 */
+  .fav-side-title .ghost-btn { padding: 8px 12px; margin: -8px -6px; }
+}
 .fav-side-star { color: var(--gold); flex: none; }
 .favorites-modal { width: 620px; max-width: calc(100vw - 32px); }
-.fav-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+.fav-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: min(52vh, 52dvh); overflow-y: auto; }
 .fav-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; }
 .fav-row-main { flex: 1; min-width: 0; }
 .fav-row-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
@@ -890,7 +897,7 @@ body.drawer-open { overflow: hidden; }
 
 /* ---------- 已斩掉的词（管理弹窗） ---------- */
 .killed-modal { width: 520px; }
-.killed-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow-y: auto; }
+.killed-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: min(52vh, 52dvh); overflow-y: auto; }
 .killed-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--fill-2); }
 .killed-icon { color: var(--muted); flex: none; }
 .killed-head { font-weight: 600; font-size: 14px; }
@@ -924,7 +931,7 @@ body.drawer-open { overflow: hidden; }
 
 /* ---------- 错词本 ---------- */
 .wrong-modal { width: 560px; }
-.wrong-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow-y: auto; }
+.wrong-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: min(52vh, 52dvh); overflow-y: auto; }
 .wrong-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--fill-2); }
 .wrong-main { flex: 1; min-width: 0; }
 .wrong-head { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
@@ -1246,6 +1253,15 @@ html {
       在卡片/列表上看着像"选中了"；用 background 自绘反馈代替它。 */
 * { -webkit-tap-highlight-color: transparent; }
 
+/* ② 按压反馈：全局关掉 tap-highlight 之后（见上），触屏上点按钮**毫无视觉变化**，
+      手感像"没点上"。给一个统一的按压态（透明度 + 主按钮轻微下沉），桌面无感。 */
+button:active:not(:disabled) { opacity: .78; }
+.primary-btn:active:not(:disabled) { transform: translateY(1px); opacity: .9; }
+
+/* ③ touch-action: manipulation：干掉 300ms 双击缩放判定 —— 复习时快速连点
+      "忘了/一般/简单" 在 iOS 上会被当成双击把页面放大（实测）。 */
+button, select, .grade-bar button { touch-action: manipulation; }
+
 /* ③ 下拉刷新：安卓 Chrome 在页面顶部继续下拉会**刷新整页** ——
       复习划卡、造句输入时手一抖就把整轮打断。滚动容器里禁用过度滚动链。 */
 body, .editor, .sidebar, .modal, .sentence-input {
@@ -1308,7 +1324,13 @@ body, .editor, .sidebar, .modal, .sentence-input {
   background: var(--fill); color: var(--muted); border: 1px solid transparent;
 }
 .input-clear:hover { color: var(--text); border-color: var(--line); }
-@media (pointer: coarse) { .input-clear { width: 34px; height: 34px; right: 2px; } }
+@media (pointer: coarse) {
+  /* 34px 低于 44px 触摸标准。曾试过负边距外扩热区 —— 结果按钮几何上超出了输入框
+     （模拟器 clearIn=false 抓到）。改成按钮自身 44×44 且完全在框内，输入框右侧
+     预留 48px 内边距给文字避让。 */
+  .input-clear { width: 44px; height: 44px; right: 0; }
+  .search-input-wrap .search-input { padding-right: 48px; }
+}
 
 /* ---------- 流式生成中的进度条 ----------
    卡片边生成边长大时，用户需要知道"到哪了"，否则会以为卡住或内容错乱。 */
@@ -1393,7 +1415,7 @@ body, .editor, .sidebar, .modal, .sentence-input {
 
 /* ---------- 应用内相机取景 ---------- */
 .camera-pane { display: flex; flex-direction: column; gap: 10px; }
-.camera-video { width: 100%; max-height: 52vh; border-radius: 12px; background: #000; object-fit: cover; }
+.camera-video { width: 100%; max-height: min(52vh, 52dvh); border-radius: 12px; background: #000; object-fit: cover; }
 .camera-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .camera-actions .primary-btn { margin-left: auto; }
 @media (max-width: 900px) { .camera-actions .primary-btn { margin-left: 0; flex: 1; justify-content: center; } }

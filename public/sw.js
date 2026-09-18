@@ -47,7 +47,8 @@ self.addEventListener('message', (event) => {
   if (data.type !== 'warm' || !Array.isArray(data.urls)) return;
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    for (const u of data.urls.slice(0, 80)) {
+    const kept = data.urls.slice(0, 80);
+    for (const u of kept) {
       try {
         // cache:'default'（走 HTTP 缓存）而不是 'reload'：vite 产物文件名带 hash + immutable，
         // HTTP 缓存里的就是正确版本，default 命中即零网络；reload 会**绕过 HTTP 缓存全额重下**，
@@ -56,6 +57,15 @@ self.addEventListener('message', (event) => {
         if (res && res.ok) await cache.put(u, res);
       } catch { /* 单个资源失败不影响其他 */ }
     }
+    // 修剪：assets 文件名带 hash，发一次版换一批 —— CACHE 名不变导致 activate 的清理
+    // 永远不会触发，旧 hash 资产在同一缓存里无限堆积（手机存储）。这里把本轮列表外的
+    // assets 条目删掉（旧 hash 反正再也不会被请求）。
+    try {
+      const keys = await cache.keys();
+      await Promise.all(keys
+        .filter((r) => /\/assets\//.test(r.url) && !kept.includes(r.url))
+        .map((r) => cache.delete(r)));
+    } catch { /* 修剪失败只影响存储占用，不影响功能 */ }
   })());
 });
 

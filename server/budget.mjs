@@ -31,7 +31,9 @@ export function createBudget({ kv, limit = 0, ttlSec = 48 * 3600, now = Date.now
         try { await kv.incrBy(k, -n); } catch { /* 减不回去顶多显示偏高，不影响拦截 */ }
         return { ok: false, used: used - n, limit };
       }
-      return { ok: true, used, limit };
+      // refund：任务失败时回冲额度用（safeRun 的失败路径调用）——
+      // 模型挂了/超时的请求不该让用户白占当日额度。
+      return { ok: true, used, limit, refund: () => kv.incrBy(k, -n).catch(() => {}) };
     } catch (e) {
       log.error('[budget] 计数失败，本次放行：', e && e.message);
       return { ok: true, used: 0, limit, failed: true };
