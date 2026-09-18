@@ -2078,6 +2078,10 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     ...process.env,
     PORT: String(PORT),
     AI_BASE_URL: mocks.aiBaseUrl,
+    AI_VISION_BASE_URL: mocks.aiBaseUrl,
+    UPSTASH_REDIS_REST_URL: '',
+    UPSTASH_REDIS_REST_TOKEN: '',
+
     AI_API_KEY: 'mock-sim',
     ALLOW_PRIVATE_BASE_URL: '1',
     // ⚠️ 模拟必须**密封**：本机 .env 的策略开关不能漏进来改判测试结果。

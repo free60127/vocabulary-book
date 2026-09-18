@@ -68,6 +68,11 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     ...process.env,
     PORT: String(SERVER_PORT),
     AI_BASE_URL: `http://127.0.0.1:${UPSTREAM_PORT}/v1`,
+    AI_VISION_BASE_URL: `http://127.0.0.1:${UPSTREAM_PORT}/v1`,
+    DAILY_JOB_LIMIT: '0',
+    UPSTASH_REDIS_REST_URL: '',
+    UPSTASH_REDIS_REST_TOKEN: '',
+
     AI_API_KEY: CANARY,                       // ← 服务端自己那份 Key（就是要守住的东西）
     // 刻意**不设** ALLOW_PRIVATE_BASE_URL：贴近生产默认（收紧私网），断言才有意义。
     // 服务端调用自己的 AI_BASE_URL 走的是 fallback 分支，不受这里影响。

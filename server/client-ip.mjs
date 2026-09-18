@@ -64,7 +64,8 @@ export function resolveClientIp({ headers = {}, socketIp = '', hops = 0, trustCf
   if (sock === '::ffff:127.0.0.1') sock = '127.0.0.1';
   // 名单启用时：对端不是名单内的代理 → XFF 一概不信，直接用 socket 地址
   const trustChain = hops > 0 && (proxyAllowlist.length === 0 || proxyAllowlist.includes(sock));
-  if (trustCf) {
+  if (trustCf && (proxyAllowlist.length === 0 || proxyAllowlist.includes(sock))) {
+    // 名单已设而对端不在名单内时，伪造 CF-Connecting-IP 也不能换来新身份 —— 同样退回 socket
     const cf = String(headers['cf-connecting-ip'] || '').trim();
     if (cf) return cf;
   }

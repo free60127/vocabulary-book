@@ -62,15 +62,6 @@ const syncDurable = syncStore.kind !== 'file';
  * Key 归一化 / 接入点安全边界（防 SSRF）/ 发请求 都在 server/llm.mjs；
  * 这里只持有它的实例，路由与任务照常调用。 */
 const ALLOW_SERVER_KEY = process.env.ALLOW_SERVER_KEY !== '0';
-/* 未配置 Key 的报错文案：localhost 上给站长看操作步骤；公网访客看到"复制 .env.example"
-   既做不到也吓人（线上实测）—— 按请求来源分流。 */
-const isLocalReq = (req) => {
-  const s = String((req && req.socket && req.socket.remoteAddress) || '');
-  return s === '127.0.0.1' || s === '::1' || s === '::ffff:127.0.0.1';
-};
-const missingKeyMsg = (req) => isLocalReq(req)
-  ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
-  : '本站暂时无法查询（模型服务还没配置好），请稍后再试';
 const llm = createLlm({ allowServerKey: ALLOW_SERVER_KEY });
 const { resolveEndpoint, parseJsonLoose, callLLM, callLLMStream, callVision, envKey } = llm;
 /** 模型/地址的取值口：路由里到处在用（原来是同文件的 stat，现在转发给 llm 模块） */
@@ -89,6 +80,19 @@ const clientIp = (req) => resolveClientIp({
   trustCf: TRUST_CF_IP,
   proxyAllowlist: TRUST_PROXY_IPS,
 });
+
+/* 未配置 Key 的报错文案：localhost 上给站长看操作步骤；公网访客看到"复制 .env.example"
+   既做不到也吓人（线上实测）—— 按请求来源分流。 */
+const isLocalReq = (req) => {
+  // 用 clientIp（含可信 XFF 解析）而不是裸 socket：nginx/VPS 同机回源时所有访客的
+  // socket 都是 127.0.0.1，裸 socket 判定会把"站长没配 Key"的文案发给全部公网访客。
+  const ip = clientIp(req);
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+};
+const missingKeyMsg = (req) => isLocalReq(req)
+  ? '未配置 AI_API_KEY：请复制 .env.example 为 .env 并填写，或在设置面板填入 API Key'
+  : '本站暂时无法查询（模型服务还没配置好），请稍后再试';
+
 const RATE_MAX = Number(process.env.RATE_LIMIT_PER_MIN || 30);
 const RATE_WINDOW_MS = 60_000;
 const rateBuckets = new Map();
@@ -423,7 +427,9 @@ async function runLookupJob(jobId, { term, kindHint, level, context, baseUrl, mo
      与其把"请重试"甩给用户让他重新排队，这里**自动重试一次**：
      重试前清空上一轮残段（SSE 段带 index，客户端按 index 落位，不会叠出重复内容）。 */
   for (let attempt = 1; attempt <= 2 && !final; attempt += 1) {
-    if (attempt > 1) job.segments = [];
+    // ⚠️ 重试**不能**清空 job.segments：在场 SSE 连接的 cursor 已越过旧 index，
+    //    清空后新段 index < cursor 永远发不出去、词典段还会丢（两轮混拼）。
+    //    追加式重发：客户端按类型覆盖折叠，done 事件再带最终词条收敛终态。
     raw = '';
     if (stream) {
       // 流式：边收边按行切段（见 server/stream.mjs 的三条硬规则）
@@ -662,8 +668,8 @@ function serveStatic(res, pathname) {
   let file = path.normalize(path.join(DIST, decoded));
   if (!insideDist(file)) return json(res, 403, { error: 'forbidden' });
   let st = null;
-  try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'not found' }); }
-  if (st.isDirectory()) {
+  try { st = fs.statSync(file); } catch { /* ENOENT：交给下面的 SPA 回落判定，不能直接 404 */ }
+  if (!st || st.isDirectory()) {
     // SPA 回落只对"看起来像页面路径"的请求生效。带扩展名的路径（`/.env`、`/x.json`）
     // 是**静态资源**请求，回落成 index.html 会给出一个 200 —— 扫描器看到 200 会以为命中，
     // 排查问题时也容易被这个假 200 带偏。本项目没有前端路由，不会因此丢链接。
