@@ -38,7 +38,9 @@ console.log('=== 接入点安全边界测试 ===\n');
 const ATTACKER_PORT = port();
 const UPSTREAM_PORT = port();
 const SERVER_PORT = port();
-const CANARY = 'sk-canary-must-never-leave-the-server';
+// ⚠️ 金丝雀里必须含 test/fake/example 之类的豁免词（见 test/no-secrets.test.mjs）：
+// 这个文件被 git 跟踪后，凭证扫描器会扫它 —— 不含豁免词的 sk- 串会被当成真实 Key 报警（实测）。
+const CANARY = 'sk-canary-test-must-never-leave-the-server';
 
 /* 攻击者服务器：只要收到任何请求就说明边界破了 */
 const seen = [];
@@ -69,6 +71,10 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     AI_API_KEY: CANARY,                       // ← 服务端自己那份 Key（就是要守住的东西）
     // 刻意**不设** ALLOW_PRIVATE_BASE_URL：贴近生产默认（收紧私网），断言才有意义。
     // 服务端调用自己的 AI_BASE_URL 走的是 fallback 分支，不受这里影响。
+    // ⚠️ ALLOW_SERVER_KEY 必须钉死为 1：本测试验证的是"带服务端 Key 的服务端会**受理**
+    // 请求并守住 Key"——而开发者本机 .env 若设了 0，会经服务端的 .env 加载漏进被测进程，
+    // 路由在受理前就 400，根本走不到要验证的分支（实测踩过）。
+    ALLOW_SERVER_KEY: '1',
     DICT_PROVIDER: 'off',
     DATA_DIR: path.join(ROOT, 'test', 'agent_out', 'sec-data-' + Date.now()),
     RATE_LIMIT_PER_MIN: '1000',

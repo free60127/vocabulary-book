@@ -129,7 +129,10 @@ body.drawer-open { overflow: hidden; }
 .example-line em { color: var(--ok-ink); flex-shrink: 1; min-width: 0; font-style: italic; }
 .example-line span { color: var(--muted); }
 
-.modal-mask { position: fixed; inset: 0; background: rgba(15, 25, 35, .45); display: flex; align-items: center; justify-content: center; z-index: 50; overflow-y: auto; padding: 20px; overscroll-behavior: contain; }
+/* 遮罩高度跟随 --vvh（visualViewport 的实时可视高度，main.jsx 启动时写入）：
+   iOS/安卓软键盘弹出时可视区缩小，遮罩跟着收进去，居中的弹窗才不会被键盘压住。
+   变量不存在（老浏览器 / jsdom）时是 auto，inset:0 照常拉伸全屏。 */
+.modal-mask { position: fixed; inset: 0; height: var(--vvh, auto); background: rgba(15, 25, 35, .45); display: flex; align-items: center; justify-content: center; z-index: 50; overflow-y: auto; padding: 20px; overscroll-behavior: contain; }
 /* max-height + 内部滚动：小屏/横屏下收藏夹这类高弹窗原来底部按钮够不到、页面也滚不动 */
 .modal { width: 420px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--panel); border-radius: 14px; padding: 20px; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -525,6 +528,11 @@ body.drawer-open { overflow: hidden; }
 .quick-save .primary-btn { white-space: nowrap; }
 @media screen and (max-width: 900px) {
   .search-bar { flex-wrap: wrap; }
+  /* 快捷入口在手机端独占一排（跟在"档位/查一下"那排下面）：下拉 flex:1 吃掉剩余宽度、
+     按钮文字不折行 —— 320px 小屏（iPhone SE）下两者刚好放满一排，
+     不会把页面撑出横向溢出（实测 29px）。 */
+  .quick-save { flex-basis: 100%; }
+  .quick-save .ocr-mode { flex: 1; min-width: 0; max-width: none; }
   /* ⚠️ 这两条原来写给 .search-input：手机端让输入框独占第一行。
      输入框套上 .search-input-wrap（为了放 × 按钮）之后，必须改指向 wrapper ——
      否则输入框被挤到和"档位/查一下"同一行，只剩几十像素宽（真机实测）。 */
@@ -1245,10 +1253,14 @@ body, .editor, .sidebar, .modal, .sentence-input {
 }
 
 /* ④ 地址栏：安卓 Chrome 的地址栏会随滚动收起/展开，100vh 因此比可视区域高，
-      弹窗底部会被顶到地址栏后面点不到。dvh 跟着可视高度走（老浏览器回退到 vh）。 */
+      弹窗底部会被顶到地址栏后面点不到。dvh 跟着可视高度走（老浏览器回退到 vh）。
+      最后一条以 --vvh 为准：软键盘弹出时它是"键盘上沿以下"的真实可视高度，
+      弹窗（含底部按钮）整体收进可视区 —— 这是修 iOS 输入框被键盘盖住的关键，
+      必须留在这条级联链的**最后**（同特异性后写胜出，挪到前面就会被上面两条盖掉）。 */
 .modal {
   max-height: calc(100vh - 40px);
   max-height: calc(100dvh - 40px);
+  max-height: calc(var(--vvh, 100dvh) - 40px);
 }
 .modal-mask { padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 
@@ -1332,13 +1344,16 @@ body, .editor, .sidebar, .modal, .sentence-input {
 
 /* ---------- 拍照 / 上传导入 ---------- */
 .side-import { width: 100%; justify-content: center; }
-.import-modal { width: min(720px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+/* ⚠️ 高度不能写死 88vh：那会把上面 .modal 的 dvh/--vvh 修复整条覆盖回去
+   （安卓地址栏收起 / iOS 键盘弹出时，底部「导入 N 个词」按钮被压到可视区外点不到 —— 实测）。
+   min() 取两者较小：桌面保持"留边 88%"的原意，移动端跟随真实可视高度。 */
+.import-modal { width: min(720px, 94vw); max-height: min(88vh, calc(var(--vvh, 100dvh) - 24px)); display: flex; flex-direction: column; }
 .import-pick { display: flex; flex-direction: column; gap: 10px; }
 .import-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .import-tips { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .import-error {
   margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 13px;
-  background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-line);
+  background: var(--err-bg); color: var(--err-ink); border: 1px solid var(--err-line);
 }
 .import-working { display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .import-preview { max-width: 100%; max-height: 40vh; border-radius: 10px; border: 1px solid var(--line); }
@@ -1358,7 +1373,7 @@ body, .editor, .sidebar, .modal, .sentence-input {
 .import-fields { flex: 1; display: flex; gap: 8px; min-width: 0; }
 .import-word { flex: 1 1 40%; min-width: 90px; font-weight: 600; }
 .import-cn { flex: 1 1 60%; min-width: 90px; }
-.import-doubt { display: flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--warn-fg); flex: none; }
+.import-doubt { display: flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--warn-ink); flex: none; }
 .import-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; flex-wrap: wrap; }
 .import-foot .primary-btn { margin-left: auto; }
 @media (max-width: 900px) {
@@ -1402,19 +1417,19 @@ body, .editor, .sidebar, .modal, .sentence-input {
   display: inline-flex; align-items: center; gap: 3px; font-size: 12px;
   padding: 2px 7px; border-radius: 999px; margin-left: 6px;
 }
-.quiz-badge.ok { background: var(--ok-bg); color: var(--ok-fg); border: 1px solid var(--ok-line); }
-.quiz-badge.bad { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-line); }
+.quiz-badge.ok { background: var(--ok-bg); color: var(--ok-ink); border: 1px solid var(--ok-line); }
+.quiz-badge.bad { background: var(--err-bg); color: var(--err-ink); border: 1px solid var(--err-line); }
 .quiz-badge.muted-badge { background: var(--fill); color: var(--muted); border: 1px solid var(--line); }
 .quiz-badge.score { background: var(--info-bg); color: var(--brand); border: 1px solid var(--info-line); }
 .quiz-feedback { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--fill); border-left: 3px solid var(--brand); }
 .quiz-feedback p { margin: 2px 0; }
 .quiz-item.graded-right { border-left: 3px solid var(--ok-line); }
-.quiz-item.graded-wrong { border-left: 3px solid var(--danger-line); }
+.quiz-item.graded-wrong { border-left: 3px solid var(--err-line); }
 .quiz-score { margin: 6px 0 0; font-size: 15px; }
-.quiz-score.full { color: var(--ok-fg); }
+.quiz-score.full { color: var(--ok-ink); }
 @media (max-width: 900px) {
   /* 手机上「批改」要够大、够靠手 */
   .result-toolbar .primary-btn { width: 100%; justify-content: center; }
   .quiz-option.clickable { padding: 12px; }
 }
-.quiz-audit { color: var(--warn-fg); }
+.quiz-audit { color: var(--warn-ink); }

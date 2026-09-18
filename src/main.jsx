@@ -2,10 +2,13 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { installErrorReporting, reportError } from './errorReport.js';
+import { watchVisualViewportHeight } from './visualViewport.js';
 import './styles.css';
 
 // 全局兜底：window.onerror / unhandledrejection 都送到自家后端（详见 errorReport.js）
 installErrorReporting();
+// 把 visualViewport 的可视高度写进 CSS 变量 --vvh：软键盘弹出时弹窗收进可视区（详见 visualViewport.js）
+watchVisualViewportHeight();
 
 /**
  * 兜底错误边界。

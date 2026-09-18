@@ -353,8 +353,10 @@ async function runProfile(browser, p) {
           clearSize: cr ? Math.round(cr.width) : 0,
         };
       });
-      check(p.id, '搜索框够宽（≥ 视口一半，手机端也是独占一行）',
-        box.inputW >= box.vw / 2, JSON.stringify(box));
+      // 曾经是 ≥ vw/2：搜索栏旁加了「加入单词本」快捷入口后（产品决策，用户拍板搜索栏可缩短），
+      // 桌面端输入框自然让位 —— 门槛放宽到 40%，仍能拦住"输入框被挤成一条缝"的回归。
+      check(p.id, '搜索框够宽（≥ 视口 40%，手机端也是独占一行）',
+        box.inputW >= box.vw * 0.4, JSON.stringify(box));
       check(p.id, '一键清空按钮在输入框内且可点',
         box.clearIn && box.clearSize >= 24, JSON.stringify(box));
       if (p.touch) {

@@ -1066,7 +1066,10 @@ const server = http.createServer(async (req, res) => {
         Connection: 'keep-alive',
         'X-Accel-Buffering': 'no',        // 让 nginx/代理不要缓冲
       });
-      const send = (event, data) => {
+      const send = (event, data, id) => {
+        // 段带 id 行：断线重连时浏览器自动带 Last-Event-ID，下面的 cursor 才能从断点续传。
+        // 不写 id 的话重连永远从 0 重放（白传一遍，客户端还得整段去重）。
+        if (id !== undefined && id !== null) res.write('id: ' + id + String.fromCharCode(10));
         res.write('event: ' + event + String.fromCharCode(10));
         res.write('data: ' + JSON.stringify(data) + String.fromCharCode(10) + String.fromCharCode(10));
       };
@@ -1083,7 +1086,7 @@ const server = http.createServer(async (req, res) => {
         const first = await findJob(jobId);
         if (!first) { send('error', { error: '任务不存在或已过期，请重新查询' }); return res.end(); }
         if (first.status === 'done' && Array.isArray(first.segments) && first.segments.length) {
-          for (let i = cursor; i < first.segments.length; i += 1) send('segment', { index: i, seg: first.segments[i], label: SEGMENT_LABEL[first.segments[i].t] || '' });
+          for (let i = cursor; i < first.segments.length; i += 1) send('segment', { index: i, seg: first.segments[i], label: SEGMENT_LABEL[first.segments[i].t] || '' }, i);
           send('done', { job: publicJob(first) });
           return res.end();
         }
@@ -1093,7 +1096,7 @@ const server = http.createServer(async (req, res) => {
           if (!job) { send('error', { error: '任务不存在或已过期，请重新查询' }); break; }
           const segs = Array.isArray(job.segments) ? job.segments : [];
           for (let i = cursor; i < segs.length; i += 1) {
-            send('segment', { index: i, seg: segs[i], label: SEGMENT_LABEL[segs[i].t] || '' });
+            send('segment', { index: i, seg: segs[i], label: SEGMENT_LABEL[segs[i].t] || '' }, i);
           }
           cursor = Math.max(cursor, segs.length);
           if (job.status === 'done') { send('done', { job: publicJob(job) }); break; }

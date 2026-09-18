@@ -56,23 +56,56 @@ export function createLlm({ allowServerKey = true } = {}) {
     if (a >= 224) return true;
     return false;
   }
-  function isPrivateIp6(ip) {
-    if (ip === '::' || ip === '::1') return true;
-    if (/^f[cd]/.test(ip)) return true;
-    if (/^fe[89ab]/.test(ip)) return true;
-    if (ip.startsWith('ff')) return true;
-    return false;
-  }
-  function isPrivateIp(raw) {
-    const ip = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
-    if (!ip) return true;
-    const mapped = ip.match(/^::(?:ffff:)?(?:(\d{1,3}(?:\.\d{1,3}){3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
-    if (mapped) {
-      if (mapped[1]) return isPrivateIp4(mapped[1]);
-      const hi = parseInt(mapped[2], 16);
-      const lo = parseInt(mapped[3], 16);
+  function isPrivateIp6(raw) {
+    // ⚠️ 必须先把地址**归一化展开**（8 组 4 位十六进制）再判断。
+    // 实测踩过：'0:0:0:0:0:0:0:1'（::1 的未压缩写法）不匹配任何前缀规则，
+    // 私网过滤被原样绕过 —— 访客可以拿它打到服务器本机。压缩/未压缩/内嵌 IPv4 一律先展开。
+    const ip = expandIp6(raw);
+    if (!ip) return true;                       // 展开失败（畸形地址）宁可误拦
+    const g = ip.split(':');                    // 8 组，每组 4 位 hex
+    const allZero = g.every((x) => x === '0000');
+    if (allZero) return true;                   // :: 未指定地址
+    if (g.slice(0, 7).every((x) => x === '0000') && g[7] === '0001') return true; // ::1 环回
+    if (g.slice(0, 5).every((x) => x === '0000') && (g[5] === 'ffff' || g[5] === '0000')) {
+      // ::ffff:0:0/96（IPv4 映射）与 ::/96（IPv4 兼容，已废弃但内核仍认）：末 32 位按 IPv4 判
+      const hi = parseInt(g[6], 16);
+      const lo = parseInt(g[7], 16);
       return isPrivateIp4([(hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255].join('.'));
     }
+    const first = parseInt(g[0], 16);
+    if (first >= 0xfc00 && first <= 0xfdff) return true;  // fc00::/7 唯一本地
+    if (first >= 0xfe80 && first <= 0xfebf) return true;  // fe80::/10 链路本地
+    if ((first & 0xff00) === 0xff00) return true;         // ff00::/8 组播
+    return false;
+  }
+  /** 把任意合法写法的 IPv6 展开（zone 已剥离）；畸形返回 null */
+  function expandIp6(raw) {
+    const s = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+    if (!s || !s.includes(':')) return null;
+    if (s.includes('.')) {
+      // 内嵌点分 IPv4（如 ::ffff:192.168.1.1）→ 换成两段 hex 再走统一展开
+      const m = s.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+      if (!m) return null;
+      const v4 = m[2].split('.').map(Number);
+      if (v4.length !== 4 || v4.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+      return expandIp6(m[1] + ((v4[0] << 8) | v4[1]).toString(16) + ':' + ((v4[2] << 8) | v4[3]).toString(16));
+    }
+    const halves = s.split('::');
+    if (halves.length > 2) return null;
+    const head = halves[0] ? halves[0].split(':') : [];
+    const tail = halves.length === 2 ? (halves[1] ? halves[1].split(':') : []) : [];
+    if (head.concat(tail).some((x) => !/^[0-9a-f]{1,4}$/.test(x))) return null;
+    if (halves.length === 1) {
+      if (head.length !== 8) return null;
+      return head.map((x) => x.padStart(4, '0')).join(':');
+    }
+    const missing = 8 - head.length - tail.length;
+    if (missing < 1) return null;               // '::' 只能在有一侧为空时表示至少一段省略
+    return head.concat(Array(missing).fill('0'), tail).map((x) => x.padStart(4, '0')).join(':');
+  }
+  function isPrivateIp(raw) {
+    const ip = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+    if (!ip) return true;
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return isPrivateIp4(ip);
     if (ip.includes(':')) return isPrivateIp6(ip);
     return true;
@@ -94,6 +127,42 @@ export function createLlm({ allowServerKey = true } = {}) {
       return addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
     } catch { return false; }
   }
+  /* ---------- DNS 重绑定（TOCTOU）的运行时复核 ----------
+   * isSafeBaseUrl 在提交时校验，但任务可能排队一阵才真正发请求；而且就算"校验完立刻 fetch"，
+   * fetch 自己还会**再解析一次 DNS** —— 攻击者用一个 TTL=0 的域名在两次解析之间换答案
+   * （校验时给公网 IP 骗过检查，连接时给内网 IP 打进来），这条链就绕过去了。
+   * 没法在原生 fetch 里钉死连接 IP（那需要 undici 的 dispatcher，本项目零依赖），
+   * 所以退而求其次做**双重复核**：
+   *  · fetch 前一刻再解析一次，发现内网/解析失败 → 直接拦下（不发出请求）；
+   *  · 响应回来后再解析一次，发现内网 → 抛错，**绝不读取/回显响应体**（那是内网内容外带的通道）。
+   * 轮换式重绑定能骗过单次复核，但每次请求都要连过两道闸，成本和成功率都被压到不划算。
+   * 只对"自定义接入点"生效：服务端自己 .env 配的地址（含内网 Ollama）不受限 —— 那是站长的选择。 */
+  const PRIVATE_ERR = () => {
+    const e = new Error('该 Base URL 此刻解析到了内网地址，请求已被安全策略拦截（DNS 重绑定防护）。若指向自建内网服务，请在服务端 .env 配置 AI_BASE_URL。');
+    e.blockedByDnsGuard = true;   // assertHostPublic 的 catch 靠它区分"自己拦的"和"DNS 挂了"
+    return e;
+  };
+  const isCustomEndpoint = (baseUrl) =>
+    Boolean(baseUrl) && !sameEndpoint(baseUrl, stat.baseUrl()) && !sameEndpoint(baseUrl, stat.visionBaseUrl());
+  async function assertHostPublic(rawBase) {
+    if (ALLOW_PRIVATE_BASE) return;
+    let u;
+    try { u = new URL(rawBase); } catch { throw PRIVATE_ERR(); }
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (looksLikeIp(host)) { if (isPrivateIp(host)) throw PRIVATE_ERR(); return; }
+    if (isPrivateName(host)) throw PRIVATE_ERR();
+    try {
+      const addrs = await dnsLookup(host, { all: true });
+      if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) throw PRIVATE_ERR();
+    } catch (e) {
+      if (e && e.blockedByDnsGuard) throw e;    // 自己抛的那颗，原样上抛
+      throw PRIVATE_ERR();                      // DNS 挂了/域名没了：按"解析不干净"拦下
+    }
+  }
+  async function guardCustomBase(baseUrl) {
+    if (!isCustomEndpoint(baseUrl)) return;
+    await assertHostPublic(baseUrl);
+  }
   async function resolveEndpoint({ bodyBase, bodyKey, fallbackBase, fallbackKey }) {
     const base = String(bodyBase || '').trim();
     const key = normalizeApiKey(bodyKey).key;
@@ -110,7 +179,8 @@ export function createLlm({ allowServerKey = true } = {}) {
     return { baseUrl: base.replace(/\/+$/, ''), apiKey: key, visitorKey: true };
   }
 
-  async function postChat({ url, headers, body, withFormat, timeoutMs = 120000 }) {
+  async function postChat({ url, headers, body, withFormat, timeoutMs = 120000, originBase }) {
+    if (originBase) await guardCustomBase(originBase);
     let r;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -132,6 +202,9 @@ export function createLlm({ allowServerKey = true } = {}) {
       const loc = r.headers.get('location') || '(响应里没有 Location)';
       throw new Error('模型接口返回了重定向（' + r.status + ' → ' + loc + '）。出于安全考虑不自动跟随，请把 Base URL 直接写成最终地址。');
     }
+    // 响应回来了也别急着读：此刻解析若变成内网，说明刚才那次连接八成就是奔着内网去的 ——
+    // 抛错终止，绝不能把响应体（内网服务的内容）读出来回显给调用方。
+    if (originBase) await guardCustomBase(originBase);
     return r;
   }
   function parseJsonLoose(text) {
@@ -162,7 +235,7 @@ export function createLlm({ allowServerKey = true } = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
     const r = await postChat({
-      url, headers, withFormat: jsonMode,
+      url, headers, withFormat: jsonMode, originBase: baseUrl,
       body: {
         model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         temperature: 0.4, max_tokens: Number(maxTokens || process.env.AI_MAX_TOKENS || 8000),
@@ -201,6 +274,7 @@ export function createLlm({ allowServerKey = true } = {}) {
     if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    await guardCustomBase(baseUrl);          // 请求前一刻复核（重绑定防护，见 assertHostPublic）
     let r;
     try {
       r = await fetch(url, {
@@ -235,6 +309,8 @@ export function createLlm({ allowServerKey = true } = {}) {
       clearTimeout(timer);
       throw new Error('模型接口没有返回流式响应体');
     }
+    // 流式要读的是响应体（内网内容外带的通道）—— 头回来后复核不过就整个丢弃
+    await guardCustomBase(baseUrl);
 
     const decoder = new TextDecoder('utf-8');
     let buf = '';
@@ -283,7 +359,7 @@ export function createLlm({ allowServerKey = true } = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
     const r = await postChat({
-      url, headers, withFormat: false, timeoutMs,
+      url, headers, withFormat: false, timeoutMs, originBase: baseUrl,
       body: {
         model,
         messages: [
@@ -335,6 +411,8 @@ export function createLlm({ allowServerKey = true } = {}) {
     stat,
     model: stat.model, baseUrl: stat.baseUrl, hasKey: stat.hasKey, envKey,
     normalizeApiKey, warnDirty, isSafeBaseUrl, resolveEndpoint,
+    // 供回归测试用：私网判定（含 IPv6 归一化）与重绑定复核
+    isPrivateIp, isPrivateIp6, assertHostPublic, isCustomEndpoint,
     postChat, parseJsonLoose, callLLM, callLLMStream, callVision,
     hasEnvKey: () => Boolean(envKey()), allowServerKey,
   };
