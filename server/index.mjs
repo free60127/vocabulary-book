@@ -1141,7 +1141,17 @@ if (!ep.visitorKey) {
       res.write(': connected' + String.fromCharCode(10) + String.fromCharCode(10));
 
       const url0 = new URL(req.url, 'http://x');
-      let cursor = Math.max(0, Number(url0.searchParams.get('from') || req.headers['last-event-id'] || 0) || 0);
+      /* 游标语义：from / Last-Event-ID 都表示「客户端**最后见过的段 id**」，续传从 id+1 开始。
+         ⚠️ 此前写成 cursor = lastSeen：重连会把 id:0 再发一遍（差一错误，回归测试
+         sseResume 抓到）—— 客户端按 index 覆盖去重兜住了正确性，但每次断线重连
+         都白收一个重复段。没有游标（首连）才从 0 全量发。
+         注意 0 是合法游标，不能靠 || 兜底：必须显式区分"没给"和"给了 0"。 */
+      const fromRaw = url0.searchParams.get('from');
+      const leiRaw = req.headers['last-event-id'];
+      const lastSeen = fromRaw !== null && fromRaw !== '' ? Number(fromRaw)
+        : (leiRaw !== undefined && leiRaw !== '' ? Number(leiRaw) : null);
+      const cursor = (lastSeen === null || !Number.isFinite(lastSeen) || lastSeen < 0) ? 0 : lastSeen + 1;
+      let sendCursor = cursor;   // 轮询中随已发段数推进（保持 const 语义的初值 + 可变游标）
       let closed = false;
       req.on('close', () => { closed = true; });
       const heartbeat = setInterval(() => { if (!closed) res.write(': ping' + String.fromCharCode(10) + String.fromCharCode(10)); }, 15000);
@@ -1151,7 +1161,7 @@ if (!ep.visitorKey) {
         const first = await findJob(jobId);
         if (!first) { send('error', { error: '任务不存在或已过期，请重新查询' }); return res.end(); }
         if (first.status === 'done' && Array.isArray(first.segments) && first.segments.length) {
-          for (let i = cursor; i < first.segments.length; i += 1) send('segment', { index: i, seg: first.segments[i], label: SEGMENT_LABEL[first.segments[i].t] || '' }, i);
+          for (let i = sendCursor; i < first.segments.length; i += 1) send('segment', { index: i, seg: first.segments[i], label: SEGMENT_LABEL[first.segments[i].t] || '' }, i);
           send('done', { job: publicJob(first) });
           return res.end();
         }
@@ -1160,10 +1170,10 @@ if (!ep.visitorKey) {
           const job = guardStale(await findJob(jobId)) || null;
           if (!job) { send('error', { error: '任务不存在或已过期，请重新查询' }); break; }
           const segs = Array.isArray(job.segments) ? job.segments : [];
-          for (let i = cursor; i < segs.length; i += 1) {
+          for (let i = sendCursor; i < segs.length; i += 1) {
             send('segment', { index: i, seg: segs[i], label: SEGMENT_LABEL[segs[i].t] || '' }, i);
           }
-          cursor = Math.max(cursor, segs.length);
+          sendCursor = Math.max(sendCursor, segs.length);
           if (job.status === 'done') { send('done', { job: publicJob(job) }); break; }
           if (job.status === 'error') { send('error', { error: job.error || '生成失败，请重试' }); break; }
           await new Promise((r) => setTimeout(r, 400));   // 段级轮询：比任务轮询快得多，只读内存
