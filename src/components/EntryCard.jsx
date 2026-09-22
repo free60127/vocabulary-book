@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowRight, Check, FileDown, LoaderCircle, MessageCircleQuestion, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
 import { KIND_LABEL } from '../wordbook.js';
 import { speak } from '../speak.js';
+import MnemonicBlock from './MnemonicBlock.jsx';
 
 /**
  * 词典核对条：一行字说明"这条讲解有多少是查过词典的"。
@@ -134,10 +135,7 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
 
       {(m.parts || m.image || m.hook || m.family) ? (
         <section className="sheet-section vocab-morph">
-          {m.parts ? <div className="morph-line"><b>词根词缀</b>：{m.parts}</div> : null}
-          {m.image ? <div className="morph-line"><b>助记画面</b>：<span className="morph-image">{m.image}</span></div> : null}
-          {m.hook ? <div className="morph-line"><b>记忆钩子</b>：{m.hook}</div> : null}
-          {m.family ? <div className="morph-line"><b>同根词</b>：{m.family}</div> : null}
+          <MnemonicBlock m={m} />
         </section>
       ) : null}
 

@@ -2,10 +2,24 @@ import React, { useEffect, useRef, useState } from 'react';
 import { BookX, Check, Eye, Lightbulb, Skull, Sparkles, Volume2 } from 'lucide-react';
 import { GRADES, GRADE_KEYS, checkSpelling, gradeHint, scheduleOf, spellHint } from '../review.js';
 import { speak } from '../speak.js';
+import MnemonicBlock from './MnemonicBlock.jsx';
 
 /** 键盘：1/2/3 = 忘了/一般/简单；空格或回车 = 翻面；Esc = 退出复习 */
 const KEY_TO_GRADE = { 1: 'forgot', 2: 'normal', 3: 'easy' };
 const HINT_MAX = 3;
+
+/**
+ * 助记块（词根拆解/助记画面/记忆钩子/同根词）只留非空字符串字段。
+ * 词条数据会被同步/备份绕一圈回来，mnemonic 内部没规整过 —— 脏值进卡片会直接渲染崩溃。
+ */
+function pickMnemonic(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const k of ['parts', 'image', 'hook', 'family']) {
+    if (typeof raw[k] === 'string' && raw[k].trim()) out[k] = raw[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 /** 复习卡片上的内容：词条（本子里的）与收藏项字段不同，统一在这里取 */
 /**
@@ -42,6 +56,12 @@ function cardOf(item, favoriteOf) {
     usage: f.usage || (e.synonyms && e.synonyms[0] && e.synonyms[0].usage) || '',
     example: (f.example ? { en: f.example, cn: f.exampleCn || '' } : null)
       || (e.examples && e.examples[0]) || null,
+    /**
+     * 词根拆解与助记 —— 忘了词的时候"怎么记"比"是什么"更有用（用户要求加进复习面）。
+     * 两个来源：本子词条自带 `e.mnemonic`；收藏项查过之后挂上的完整词条 `f.entry.mnemonic`
+     * （收藏那一层自己不存助记，只能从挂载的词条里取）。
+     */
+    mnemonic: pickMnemonic(e.mnemonic) || pickMnemonic(f.entry && f.entry.mnemonic),
     fromFavorite: Boolean(item.favorite),
   };
 }
@@ -276,6 +296,11 @@ export default function ReviewPane({
             </div>
             <p><strong>{c.meaning}</strong></p>
             {c.brief ? <p className="muted">{c.brief}</p> : null}
+            {/* 词根拆解 + 助记：与词条卡同一块紫卡。只在翻面后出现 —— 助记画面里往往
+                直接写着这个词（"这就是 dismantle"），翻面前给就等于剧透。 */}
+            {c.mnemonic ? (
+              <div className="vocab-morph review-morph"><MnemonicBlock m={c.mnemonic} /></div>
+            ) : null}
             {c.diff ? (
               <p className="muted small review-diff">
                 与 <b>{c.synWord || '近义词'}</b> 的差别：{c.diff}

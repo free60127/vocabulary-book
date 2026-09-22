@@ -106,6 +106,39 @@ describe('ReviewPane 复习卡', () => {
     expect(container.textContent).toContain('什么时候用哪个');
   });
 
+  it('助记块：翻面前不剧透，翻面后显示词根拆解与助记', () => {
+    const item = word('object');
+    item.entry.mnemonic = { parts: 'ob-（对着）+ ject（扔）', image: '对着人扔东西 —— 这就是 object', hook: '反对就朝他扔', family: 'ejection、inject' };
+    const props = { queue: [item], index: 0, mix: { book: 1, fav: 0 } };
+    const { container, rerender } = render(<ReviewPane {...revProps(props)} />);
+    expect(container.querySelector('.review-morph')).toBeNull();          // 翻面前不给（助记画面里写着词本身）
+    rerender(<ReviewPane {...revProps({ ...props, revealed: true })} />);
+    const morph = container.querySelector('.review-morph');
+    expect(morph).toBeTruthy();
+    expect(morph.textContent).toContain('ob-（对着）+ ject（扔）');
+    expect(morph.textContent).toContain('助记画面');
+    expect(morph.textContent).toContain('记忆钩子');
+    // 脏数据（mnemonic 里混进非字符串）不渲染也不崩
+    const dirty = word('object');
+    dirty.entry.mnemonic = { parts: 42, image: { noisy: true } };
+    const { container: c2 } = render(<ReviewPane {...revProps({ queue: [dirty], index: 0, revealed: true, mix: { book: 1, fav: 0 } })} />);
+    expect(c2.querySelector('.review-morph')).toBeNull();
+  });
+
+  it('收藏的词：助记从挂载的完整词条里取', () => {
+    const favItem = {
+      key: 'f3', kind: 'favorite', head: 'dismantle', phonetic: '/dɪsˈmæntl/',
+      favorite: {
+        id: 'f3', head: 'dismantle', brief: '拆除',
+        entry: { head: 'dismantle', mnemonic: { parts: 'dis-（去掉）+ mantle（斗篷）', hook: '把「斗篷」扒下来 → 拆掉外壳' } },
+      },
+      schedule: { due: Date.now(), interval: 1 },
+    };
+    const props = { queue: [favItem], index: 0, revealed: true, mix: { book: 0, fav: 1 } };
+    const { container } = render(<ReviewPane {...revProps(props)} />);
+    expect(container.querySelector('.review-morph').textContent).toContain('斗篷');
+  });
+
   it('自测题：选项可点、未作答时禁用批改、批改后显示判定与反馈', () => {
     const quiz = {
       title: '自测题', questions: [
