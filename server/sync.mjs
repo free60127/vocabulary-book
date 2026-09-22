@@ -33,7 +33,7 @@ export const SNAPSHOT_LIMITS = Object.freeze({
   deletedEntries: 5000,     // 已删除的词条（bookId|entryId）
   deletedFavorites: 2000,   // 已删除的收藏项
   days: 400,                // 学习日期（连续天数）：YYYY-MM-DD 去重列表
-  review: 5000,             // 复习排期表：entryId → {ease,interval,due,reps,lapses}
+  review: 5000,             // 复习排期表：entryId → {ease,interval,due,reps,lapses,lastReviewed,lastGrade}
   bookIdChars: 64,
   bookNameChars: 80,
   entryIdChars: 64,         // 词条稳定 id（客户端生成，形如 wb-xxxx）
@@ -187,6 +187,11 @@ export function sanitizeSnapshot(raw) {
       due: num(v.due),
       reps: num(v.reps),
       lapses: num(v.lapses),
+      // lastReviewed 是两端合并的**裁决字段**（客户端 mergeSchedules 按"谁最近复习过"取新者）：
+      // 白名单漏了它，云端存下的排期就永远没有时间戳，另一台设备拉下来后一条都采纳不了 ——
+      // 表现为"复习进度永远同步不过去、每台设备都要从头复习"（2026-09-22 用户实测踩中）。
+      lastReviewed: num(v.lastReviewed),
+      lastGrade: v.lastGrade === 'forgot' || v.lastGrade === 'normal' || v.lastGrade === 'easy' ? v.lastGrade : '',
     };
   }
 
