@@ -179,6 +179,7 @@ process.exit(failed.length ? 1 : 0);
     async count() { return store2.size; },
   };
   const smtpDetail = 'test-internal-smtp-detail-host-5.6.7.8';   // 故意的假细节，用于断言不外泄
+  const SECRET = 'test-only-secret-credential';                  // 邮件失败时夹带的"内部机密"，同样必须不外泄
   const accts = createAccounts({
     kv: kv2,
     mail: async () => ({ ok: false, code: 'connect', error: 'connect failed: ' + SECRET }),
