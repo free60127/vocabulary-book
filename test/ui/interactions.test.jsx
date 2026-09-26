@@ -11,9 +11,10 @@
  */
 import React from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 
 import ReviewPane from '../../src/components/ReviewPane.jsx';
+import { useReviewSession } from '../../src/hooks/useReviewSession.js';
 import ReviewSetup from '../../src/components/ReviewSetup.jsx';
 import SentencePane from '../../src/components/SentencePane.jsx';
 import QuizPane from '../../src/components/QuizPane.jsx';
@@ -137,6 +138,41 @@ describe('ReviewPane 复习卡', () => {
     const props = { queue: [favItem], index: 0, revealed: true, mix: { book: 0, fav: 1 } };
     const { container } = render(<ReviewPane {...revProps(props)} />);
     expect(container.querySelector('.review-morph').textContent).toContain('斗篷');
+  });
+
+  it('按住数字键的 OS 自动重复不评分（否则一秒刷完整队）', () => {
+    const onGrade = vi.fn();
+    const onReveal = vi.fn();
+    const { rerender } = render(<ReviewPane {...revProps({ onReveal })} />);
+    fireEvent.keyDown(document, { key: ' ', repeat: true });
+    expect(onReveal).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: ' ' });
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    rerender(<ReviewPane {...revProps({ revealed: true, onGrade })} />);
+    fireEvent.keyDown(document, { key: '1', repeat: true });
+    fireEvent.keyDown(document, { key: '1', repeat: true });
+    expect(onGrade).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: '1' });
+    expect(onGrade).toHaveBeenCalledTimes(1);
+  });
+
+  it('useReviewSession：同一张卡的重复评分事件只算一次', () => {
+    const gradeEntry = vi.fn();
+    const markWrong = vi.fn();
+    const markStudied = vi.fn();
+    const clearWrongWord = vi.fn();
+    const flash = vi.fn();
+    const { result } = renderHook(() => useReviewSession({
+      due: [], todayQueue: [], wrongQueue: [],
+      gradeEntry, markStudied, markWrong, clearWrongWord, killWord: vi.fn(), flash,
+    }));
+    act(() => { result.current.setPending({ items: [word('alpha')], kind: 'due' }); });
+    act(() => { result.current.begin('review'); });   // begin 读闭包里的 pending，须等 setPending 落定
+    // 连点两次：第二次进的是同一个渲染闭包（同一 index + 同一 key），必须被守卫拦下
+    act(() => { result.current.grade('forgot'); });
+    act(() => { result.current.grade('forgot'); });
+    expect(gradeEntry).toHaveBeenCalledTimes(1);
+    expect(markWrong).toHaveBeenCalledTimes(1);
   });
 
   it('自测题：选项可点、未作答时禁用批改、批改后显示判定与反馈', () => {

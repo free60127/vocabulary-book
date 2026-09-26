@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadSpell, saveSpell } from '../storage.js';
 
 /**
@@ -22,6 +22,8 @@ export function useReviewSession({
   const [practice, setPractice] = useState(false);
   const [kind, setKind] = useState('due');           // due | today | wrong
   const [pending, setPending] = useState(null);      // 选模式之前的"待开始队列"
+  /** 最近一次评分的 "index:key"。同一张卡的重复评分事件（狂点评分键、双事件竞态）只算一次 */
+  const lastGradedRef = useRef('');
 
   /** 新一轮开始前把界面复位 */
   const resetRound = useCallback((items, nextKind, nextMode) => {
@@ -30,6 +32,7 @@ export function useReviewSession({
     setRevealed(false);
     setKind(nextKind);
     setMode(nextMode);
+    lastGradedRef.current = '';
     saveSpell(nextMode === 'spell');
     // 练习轮（加练 / 错词）和拼写轮都**不写排期**：同一个词一天内被评两次会把间隔越推越长
     setPractice(nextKind !== 'due' || nextMode === 'spell');
@@ -64,6 +67,7 @@ export function useReviewSession({
     setMode(next);
     saveSpell(next === 'spell');
     setIndex(0); setRevealed(false);
+    lastGradedRef.current = '';
     setPractice(kind !== 'due' || next === 'spell');
     flash(next === 'spell' ? '已切到拼写模式 —— 这一轮从头开始拼' : '已切回复习模式 —— 这一轮从头开始', 2600);
   }, [mode, queue, kind, flash]);
@@ -72,6 +76,11 @@ export function useReviewSession({
   const grade = useCallback((g) => {
     const cur = queue && queue[index];
     if (!cur) return;
+    // 双击/连点会带着同一个渲染闭包进来两次：两次都拿到同一个 cur，就会给同一个词
+    // 记两次错、把 SM-2 推两轮。同一 index + 同一 key 的评分只认第一次。
+    const stamp = index + ':' + cur.key;
+    if (lastGradedRef.current === stamp) return;
+    lastGradedRef.current = stamp;
     if (g === 'forgot') markWrong(cur, 'forgot');
     else if (g === 'easy') clearWrongWord(cur.head);
     if (!practice) gradeEntry(cur, g);
@@ -103,6 +112,7 @@ export function useReviewSession({
     saveSpell(true);
     setPractice(true);
     setIndex(0); setRevealed(false);
+    lastGradedRef.current = '';
   }, [queue]);
 
   const exit = useCallback(() => {

@@ -104,6 +104,8 @@ export default function ReviewPane({
   useEffect(() => {
     const onKey = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // 按住不放的 OS 自动重复必须忽略：否则手搭在 1/2/3 上，一秒就把整队词连刷掉
+      if (e.repeat) return;
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') { e.preventDefault(); onExit(); return; }
