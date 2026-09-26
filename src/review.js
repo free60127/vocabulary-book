@@ -314,7 +314,15 @@ export function buildTodayQueue({ entries, favorites, schedule, killed, revived,
 const TAIL_WORDS = new Set(['to', 'for', 'with', 'on', 'in', 'of', 'at', 'about', 'into', 'from',
   'sth', 'sb', 'someone', 'something', 'doing', 'that', 'whether', 'up', 'off']);
 export function checkSpelling(input, head) {
-  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const norm = (s) => String(s || '')
+    // 手机输入法的两类暗箭（对抗测试 R8）：
+    //  · 自动纠错把 can't 换成 can't（U+2019）、中英混输打出全角 ＇＂（Ｏ）
+    //  · 组合字符拆成 e + ◌́（NFD），视觉一样但 !==
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u02BC\u00B4\uFF07]/g, "'")
+    .replace(/[\u201C\u201D\uFF02]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, '-')
+    .trim().toLowerCase().replace(/\s+/g, ' ');
   const want = norm(head);
   const got = norm(input);
   if (!got) return false;

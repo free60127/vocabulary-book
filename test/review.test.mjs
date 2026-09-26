@@ -216,6 +216,13 @@ console.log('\n' + '='.repeat(62));
   check('拼写：短语必须打全（打一个 no 不算）', checkSpelling('no', 'no sooner ... than') === false);
   check('拼写：短语打全了就算对', checkSpelling('pull off', 'pull off'));
   check('拼写：打错就是错', checkSpelling('objekt', 'object') === false);
+  // 手机输入法暗箭（对抗测试 R8）：自动纠错的弯撇号 / 中英混输的全角字符 / NFD 组合字符
+  check('拼写：弯撇号 can’t 算对', checkSpelling('can’t', "can't"));
+  check('拼写：全角撇号与全角引号算对', checkSpelling('can＇t', "can't") && checkSpelling('＂x＂', '"x"'));
+  check('拼写：全角字母 NFKC 折叠算对', checkSpelling('Ｏbject', 'object'));
+  check('拼写：NFD 组合字符算对', checkSpelling('café', 'café'));
+  check('拼写：多打空格与弯引号组合都算对', checkSpelling('no  sooner … than', 'no sooner ... than'));
+  check('拼写：真错仍不放过（撇号修不完的）', checkSpelling('cant', "can't") === false);
   check('提示 1 级只给首字母', spellHint('incumbent', 1).startsWith('i ') && !spellHint('incumbent', 1).includes('ncumbent'));
   check('提示 2 级给一半', spellHint('incumbent', 2).startsWith('incum '));
   check('提示 3 级给整个答案', spellHint('incumbent', 3) === 'incumbent');
