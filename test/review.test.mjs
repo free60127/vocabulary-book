@@ -10,7 +10,7 @@ import {
   EASE_MAX, EASE_MIN, GRADES, INTERVAL_MAX, addStudyDay, addWrong, buildReviewQueue, buildWrongQueue,
   buildTodayQueue, checkSpelling, clearWrong, dayKey, dueEntries, dueLabel, gradeHint, isDueOn, killedSet, mergeDays,
   mergeSchedules, mergeWrong, newSchedule, nextDueAt, normalizeSchedule, scheduleOf, sm2Review,
-  spellHint, summarizeStreak, wrongList,
+  spellHint, summarizeStreak, utcDayNo, wrongList,
 } from '../src/review.js';
 import { sanitizeFollowup, sanitizeSentenceGrade, sanitizeZhCandidates } from '../server/resultShape.mjs';
 import { hasCJK } from '../src/format.js';
@@ -101,6 +101,10 @@ console.log('=== 复习排期测试 ===\n');
   check('没排期的词条立刻到期（新词能练）', dueEntries([{ id: 'w9', createdAt: T0 }], {}, T0).length === 1);
   check('下一次复习时间取最小未来值', nextDueAt(entries, map, T0) === T0 + 3 * DAY);
   check('dueLabel 说人话', dueLabel({ due: T0 - DAY }, T0) === '今天' && dueLabel({ due: T0 + DAY }, T0) === '明天' && dueLabel({ due: T0 + 5 * DAY }, T0) === '5 天后');
+  // 口径与 isDueOn 对齐：明天 23:00 到期的词，今晚看必须说"明天"（以前 ceil(25h/24h) 谎报"2 天后"）
+  const evening = new Date(); evening.setHours(22, 0, 0, 0);
+  const lateTomorrow = evening.getTime() + 25 * 3600 * 1000;
+  check('dueLabel 按日历天：明天深夜到期今晚看是"明天"', dueLabel({ due: lateTomorrow }, evening.getTime()) === '明天');
   check('评分按钮预告下次间隔', gradeHint(newSchedule(T0), 'easy', T0) === '2 天后再见', gradeHint(newSchedule(T0), 'easy', T0));
 }
 
@@ -137,6 +141,11 @@ console.log('=== 复习排期测试 ===\n');
   check('昨天学过、今天还没学 → 仍有 1 天（不算断）', yesterdayOnly.current === 1, String(yesterdayOnly.current));
   check('合并两边的学习日期取并集去重', mergeDays([d1], [d1, d0]).length === 2);
   check('非法日期被丢掉', mergeDays(['2026-09-15', 'x', 123, ''], []).length === 1);
+  // UTC 日数恒为 24h：本地零点相减在夏令时地区是 23/25h，会把连续天数折断（R3）
+  check('utcDayNo 相邻日期恒差 24h（对夏令时免疫）',
+    utcDayNo('2026-03-08') - utcDayNo('2026-03-07') === DAY && utcDayNo('2026-11-02') - utcDayNo('2026-11-01') === DAY,
+    String(utcDayNo('2026-03-08') - utcDayNo('2026-03-07')));
+  check('最长连续跨月也数得对', summarizeStreak(['2026-01-31', '2026-02-01', '2026-02-02'], new Date(2026, 1, 2, 12).getTime()).longest === 3);
 }
 
 console.log('\n' + '='.repeat(62));

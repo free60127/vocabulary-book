@@ -106,6 +106,16 @@ const dayKey = (ts) => {
 export { dayKey };
 
 /**
+ * 日期键 → UTC 当日零点的毫秒数。
+ * 为什么不用 `new Date(str + 'T00:00:00')` 相减：那是**本地**零点，夏令时时一个历法日
+ * 只有 23 或 25 小时，相邻两天相减 ≠ 24h，连续天数会被拦腰折断。UTC 日恒为 24h。
+ */
+export const utcDayNo = (s) => {
+  const [y, m, d] = String(s).split('-').map(Number);
+  return Date.UTC(y, (m || 1) - 1, d || 1);
+};
+
+/**
  * 到期判定用**天**，不用精确时刻。
  *
  * 为什么：SM-2 把下次到期算成 `上次复习 + 间隔 × 24h` —— 昨晚 21:00 复习、间隔 1 天的词，
@@ -144,11 +154,12 @@ export function nextDueAt(entries, map, now = Date.now()) {
   return Number.isFinite(min) ? min : 0;
 }
 
-/** "2 天后 / 今天 / 已到期"这类人话 */
+/** "2 天后 / 今天 / 已到期"这类人话。按**日历天**数差，与 isDueOn 同一口径 ——
+ *  用 `ceil((due-now)/24h)` 会在"明天晚上到期、今晚来看"时谎报成"2 天后"（明天它就进队列了）。 */
 export function dueLabel(schedule, now = Date.now()) {
   const d = num(schedule && schedule.due, 0);
   if (!d) return '今天';
-  const days = Math.ceil((d - now) / DAY);
+  const days = Math.round((utcDayNo(dayKey(d)) - utcDayNo(dayKey(now))) / DAY);
   if (days <= 0) return '今天';
   if (days === 1) return '明天';
   return days + ' 天后';
@@ -197,8 +208,8 @@ export function summarizeStreak(days, now = Date.now()) {
   let run = 0;
   let prev = '';
   for (const d of sorted) {
-    const prevDate = prev ? new Date(prev + 'T00:00:00') : null;
-    run = prevDate && (new Date(d + 'T00:00:00') - prevDate === DAY) ? run + 1 : 1;
+    // 用 UTC 日数比较（恒 24h）：本地零点相减在夏令时地区会把 23/25h 的历法日判成"不连续"
+    run = prev && utcDayNo(d) - utcDayNo(prev) === DAY ? run + 1 : 1;
     longest = Math.max(longest, run);
     prev = d;
   }
