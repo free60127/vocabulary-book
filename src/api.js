@@ -41,42 +41,49 @@ async function api(path, opts = {}, timeoutMs = TIMEOUT.normal) {
   return data;
 }
 
+/**
+ * 路径参数统一编码：jobId 来自服务端响应、同步码来自本机 localStorage ——
+ * 后者可能被扩展/手改弄坏（带空格、?、#、/）。裸拼进 URL 会打出变形请求
+ * （'?' 截断路径、'/' 命中别的路由），服务器连一个像样的 404 都给不了。
+ */
+const seg = (v) => encodeURIComponent(String(v ?? ''));
+
 /* ---------- 状态 ---------- */
 export const getStatus = () => api('/api/status', {}, TIMEOUT.fast);
 
 /* ---------- 查词：提交 → 轮询 ---------- */
 export const lookup = (payload) => api('/api/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
-export const getLookupJob = (jobId) => api('/api/lookup/' + jobId, {}, TIMEOUT.fast);
+export const getLookupJob = (jobId) => api('/api/lookup/' + seg(jobId), {}, TIMEOUT.fast);
 
 /* ---------- 自测题批改（主观题交给模型） ---------- */
 const quizGradeCall = (payload) => api('/api/quiz/grade', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}),
 });
 export const quizGrade = Object.assign(quizGradeCall, {
-  job: (jobId) => api('/api/quizgrade/' + jobId, {}, TIMEOUT.fast),
+  job: (jobId) => api('/api/quizgrade/' + seg(jobId), {}, TIMEOUT.fast),
 });
 
 /* ---------- 拍照识别单词表（图片较大，超时给宽一点） ---------- */
 export const ocrImport = (payload) => api('/api/ocr', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}),
 }, TIMEOUT.upload);
-export const getOcrJob = (jobId) => api('/api/ocr/' + jobId, {}, TIMEOUT.fast);
+export const getOcrJob = (jobId) => api('/api/ocr/' + seg(jobId), {}, TIMEOUT.fast);
 
 /* ---------- 自测题 ---------- */
 export const quiz = (payload) => api('/api/quiz', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
-export const getQuizJob = (jobId) => api('/api/quiz/' + jobId, {}, TIMEOUT.fast);
+export const getQuizJob = (jobId) => api('/api/quiz/' + seg(jobId), {}, TIMEOUT.fast);
 
 /* ---------- 词条追问（看完卡片之后的"再问一句"） ---------- */
 export const followup = (payload) => api('/api/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
-export const getFollowupJob = (jobId) => api('/api/followup/' + jobId, {}, TIMEOUT.fast);
+export const getFollowupJob = (jobId) => api('/api/followup/' + seg(jobId), {}, TIMEOUT.fast);
 
 /* ---------- 造句练习（出题 / 批改） ---------- */
 export const sentencePractice = (payload) => api('/api/sentence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload ?? {}) });
-export const getSentenceJob = (jobId) => api('/api/sentence/' + jobId, {}, TIMEOUT.fast);
+export const getSentenceJob = (jobId) => api('/api/sentence/' + seg(jobId), {}, TIMEOUT.fast);
 
 /* ---------- 云同步 ---------- */
 export const createSyncCode = () => api('/api/sync/new', { method: 'POST' }, TIMEOUT.normal);
-export const pullCloudSync = (code) => api('/api/sync/' + code, {}, TIMEOUT.normal);
+export const pullCloudSync = (code) => api('/api/sync/' + seg(code), {}, TIMEOUT.normal);
 
 /** 推送快照。409 时不抛错，把云端最新版本回给调用方，让它重新合并再推。 */
 export async function pushCloudSync(code, payload) {
@@ -84,7 +91,7 @@ export async function pushCloudSync(code, payload) {
   const timer = setTimeout(() => controller.abort(), TIMEOUT.normal);
   let res;
   try {
-    res = await fetch(BASE + '/api/sync/' + code, {
+    res = await fetch(BASE + '/api/sync/' + seg(code), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal,
     });
   } catch {
