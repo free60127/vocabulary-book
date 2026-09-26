@@ -25,6 +25,7 @@ import { NewBookModal, RenameBookModal, MergeBookModal } from '../../src/compone
 import SentenceBookModal from '../../src/components/modals/SentenceBookModal.jsx';
 import WrongBookModal from '../../src/components/modals/WrongBookModal.jsx';
 import KilledModal from '../../src/components/modals/KilledModal.jsx';
+import { useEscape } from '../../src/hooks/useEscape.js';
 
 const noop = () => {};
 
@@ -173,6 +174,23 @@ describe('ReviewPane 复习卡', () => {
     act(() => { result.current.grade('forgot'); });
     expect(gradeEntry).toHaveBeenCalledTimes(1);
     expect(markWrong).toHaveBeenCalledTimes(1);
+  });
+
+  it('弹窗开着时复习快捷键整体让位（Esc 不再连复习会话一起退掉）', () => {
+    const onExit = vi.fn();
+    const onReveal = vi.fn();
+    render(<ReviewPane {...revProps({ onExit, onReveal })} />);
+    // 模拟一个走 useEscape 栈的弹窗（错词本/设置都这样压在复习页上面）
+    function FakeModal() { useEscape(noop); return <div role="dialog" />; }
+    const modal = render(<FakeModal />);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(document, { key: ' ' });
+    expect(onExit).not.toHaveBeenCalled();          // 以前：Esc 把复习也退了
+    expect(onReveal).not.toHaveBeenCalled();        // 以前：空格隔着弹窗偷翻面
+    // 弹窗关了（卸载出栈）→ 复习快捷键恢复
+    modal.unmount();
+    fireEvent.keyDown(document, { key: ' ' });
+    expect(onReveal).toHaveBeenCalledTimes(1);
   });
 
   it('自测题：选项可点、未作答时禁用批改、批改后显示判定与反馈', () => {

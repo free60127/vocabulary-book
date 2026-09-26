@@ -13,6 +13,12 @@ import { useEffect, useRef } from 'react';
  */
 const stack = [];
 
+/** 当前是否有弹窗在 Esc 栈上。非弹窗的全局快捷键（复习卡的 Esc/空格）
+ *  用它让位：弹窗开着时按 Esc 只关弹窗，不能连底下的复习会话一起退掉。 */
+export function escapeActive() {
+  return stack.length > 0;
+}
+
 export function useEscape(onClose, active = true) {
   const cbRef = useRef(onClose);
   cbRef.current = onClose;

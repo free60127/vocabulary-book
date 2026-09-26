@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { BookX, Check, Eye, Lightbulb, Skull, Sparkles, Volume2 } from 'lucide-react';
 import { GRADES, GRADE_KEYS, checkSpelling, gradeHint, scheduleOf, spellHint } from '../review.js';
 import { speak } from '../speak.js';
+import { escapeActive } from '../hooks/useEscape.js';
 import MnemonicBlock from './MnemonicBlock.jsx';
 
 /** 键盘：1/2/3 = 忘了/一般/简单；空格或回车 = 翻面；Esc = 退出复习 */
@@ -103,6 +104,9 @@ export default function ReviewPane({
   /* 键盘快捷键：拼写模式下不抢输入框的键（回车交给表单提交） */
   useEffect(() => {
     const onKey = (e) => {
+      // 弹窗开着时整体让位：否则按 Esc 会"关掉错词本弹窗的同时把整轮复习也退掉"，
+      // 进度直接丢（对抗测试 R9）；空格也会隔着弹窗偷翻面
+      if (escapeActive()) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // 按住不放的 OS 自动重复必须忽略：否则手搭在 1/2/3 上，一秒就把整队词连刷掉
       if (e.repeat) return;
