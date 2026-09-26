@@ -42,6 +42,31 @@ export function deviceId() {
 export const newSyncCode = createSyncCode;
 
 /**
+ * 服务端快照对 review 的条数硬顶（server/sync.mjs SNAPSHOT_LIMITS.review，契约测试钉住两边相等）。
+ * 超限服务端**明确拒收**整次推送 —— 所以必须在推送前自己收口，否则重度用户（或
+ * 删过很多词的设备：孤儿排期没有任何清理）会在某一天起永远同步失败。
+ */
+export const REVIEW_PUSH_LIMIT = 5000;
+
+/**
+ * 把 review 收口到服务端上限：只留"还存在于本子或收藏夹里"的键（孤儿排期没有意义，
+ * 词条删了排期留着只会白白占用配额），键数仍超限时按最近复习时间保留前 N 个。
+ */
+export function pruneReviewForPush(books, favorites, review, limit = REVIEW_PUSH_LIMIT) {
+  const valid = new Set();
+  for (const b of Array.isArray(books) ? books : []) {
+    for (const e of (b && b.entries) || []) if (e && e.id) valid.add(e.id);
+  }
+  for (const f of Array.isArray(favorites) ? favorites : []) if (f && f.id) valid.add(f.id);
+  return Object.fromEntries(
+    Object.entries(review && typeof review === 'object' ? review : {})
+      .filter(([k]) => valid.has(k))
+      .sort((a, b) => (Number(b[1] && b[1].lastReviewed) || 0) - (Number(a[1] && a[1].lastReviewed) || 0))
+      .slice(0, limit),
+  );
+}
+
+/**
  * 与云端做一次双向同步。
  * @returns {Promise<{ok:boolean, error?:string, version?:number, merged?:object, added?:object, recovered?:boolean}>}
  */
@@ -69,6 +94,7 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
     entries: ((remote.data && remote.data.books) || []).reduce((n, b) => n + ((b.entries || []).length), 0),
   };
   let payload = mergeSnapshot(local, remote.data);
+  payload.review = pruneReviewForPush(payload.books, payload.favorites, payload.review);
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const r = await pushCloudSync(code, {
@@ -110,6 +136,7 @@ export async function syncOnce({ code, local, device, maxAttempts = 3 }) {
         },
         r.data.data,
       );
+      payload.review = pruneReviewForPush(payload.books, payload.favorites, payload.review);
       continue;
     }
     return { ok: false, error: (r.data && r.data.error) || ('同步失败：HTTP ' + r.status) };

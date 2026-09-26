@@ -28,8 +28,10 @@ globalThis.localStorage = {
 };
 
 const { sanitizeSnapshot } = await import('../server/sync.mjs');
+const { SNAPSHOT_LIMITS } = await import('../server/sync.mjs');
 const { mergeSchedules } = await import('../src/review.js');
 const { mergeSnapshot } = await import('../src/storage.js');
+const { pruneReviewForPush, REVIEW_PUSH_LIMIT } = await import('../src/sync.js');
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -101,6 +103,29 @@ const now = Date.now();
   const local = { 'old': { ease: 2.5, interval: 2, due: now + DAY, reps: 2, lapses: 0, lastReviewed: now - DAY, lastGrade: 'normal' } };
   const merged = mergeSchedules(local, d);
   check('无时间戳的云端记录仍不会覆盖本机较新的记录', merged.old.lastReviewed === now - DAY && merged.old.interval === 2);
+}
+
+/* ---------- ④ 推送收口：孤儿排期与超限排期不得让服务端拒收（对抗测试 R7） ---------- */
+{
+  check('客户端推送上限与服务端 SNAPSHOT_LIMITS.review 相等', REVIEW_PUSH_LIMIT === SNAPSHOT_LIMITS.review);
+
+  // 3000 个真实词条 + 删词留下的 500 个孤儿排期：以前孤儿会一路推给服务端白占配额
+  const books = [{ id: 'b1', name: '本', entries: Array.from({ length: 3000 }, (_, i) => ({ id: 'wb-' + i, head: 'w' + i })) }];
+  const review = {};
+  for (let i = 0; i < 3000; i++) review['wb-' + i] = { ease: 2.5, interval: 1, due: 1, reps: 1, lapses: 0, lastReviewed: i + 1 };
+  for (let i = 0; i < 500; i++) review['orphan-' + i] = { ease: 2.5, interval: 1, due: 1, reps: 9, lapses: 0, lastReviewed: 999999 };
+  const pruned = pruneReviewForPush(books, [], review);
+  check('孤儿排期（词条已删）在推送前被裁掉', Object.keys(pruned).length === 3000 && !Object.keys(pruned).some((k) => k.startsWith('orphan')));
+
+  // 词条数本身超上限：按最近复习保留前 N 个，同步保持可用（以前是整次推送被拒收）
+  const many = Array.from({ length: 6000 }, (_, i) => ({ id: 'wb-' + i, head: 'w' + i }));
+  const bigReview = {};
+  for (let i = 0; i < 6000; i++) bigReview['wb-' + i] = { ease: 2.5, interval: 1, due: 1, reps: 1, lapses: 0, lastReviewed: i };
+  const big = pruneReviewForPush([{ id: 'b1', name: '本', entries: many }], [], bigReview);
+  check('6000 词超限：只推最近复习的 5000 条，同步不再被拒收',
+    Object.keys(big).length === REVIEW_PUSH_LIMIT && big['wb-5999'] && !big['wb-0']);
+  check('裁剪结果能通过服务端 sanitizeSnapshot（端到端不再报"条目过多"）',
+    sanitizeSnapshot({ books: [], days: [], history: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [], review: big }).ok);
 }
 
 const failed = results.filter((r) => !r.ok);
