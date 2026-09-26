@@ -107,7 +107,9 @@ const bytes = (v) => JSON.stringify(v).length;
     mergeHistory(older, newer)[0].entry.brief === '新的' && mergeHistory(newer, older)[0].entry.brief === '新的');
   check('都没有 at 时退化成原来的"本机优先"', mergeHistory([{ id: 'a', head: 'L' }], [{ id: 'a', head: 'R' }])[0].head === 'L');
   check('合并结果同样受条数上限约束',
-    mergeHistory(Array.from({ length: 80 }, (_, i) => ({ id: 'x' + i, at: i })), []).length === HISTORY_LIMIT);
+    mergeHistory(Array.from({ length: 80 }, (_, i) => ({ id: 'x' + i, head: 'w' + i, at: i })), []).length === HISTORY_LIMIT);
+  check('无 head 的裸历史条目被净化丢弃（侧栏直接渲染 head，脏值会白屏）',
+    mergeHistory([{ id: 'h9', at: 1 }, { id: 'h10', head: 'ok', at: 2 }], []).map((h) => h.id).join() === 'h10');
 }
 
 /* ---------- 墓碑不该误伤"还活着的"数据（同步推空的那类故障）----------

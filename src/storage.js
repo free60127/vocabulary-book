@@ -265,11 +265,50 @@ export const loadSettings = () => parseObject(safeGet(SETTINGS_KEY, '{}'));
 export const saveSettings = (s) => safeSet(SETTINGS_KEY, JSON.stringify(s || {}));
 
 /* ---------- 快照：云同步与备份共用 ---------- */
+/**
+ * 错句本条目白名单规整。备份文件、云同步、localStorage 三条路都不可信：
+ * 只验 truthy 放不过 `sentence: {对象}` 这种脏值 —— 弹窗直接渲染它，
+ * "Objects are not valid as a React child" 一秒白屏（对抗测试 R5 实锤）。
+ */
+function cleanSentenceItem(x) {
+  if (!x || typeof x !== 'object') return null;
+  const S = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const id = S(x.id, 64);
+  const head = S(x.head, 200);
+  const sentence = S(x.sentence, 2000);
+  if (!id || !head || !sentence) return null;
+  return {
+    id, head, sentence,
+    phonetic: S(x.phonetic, 120),
+    cn: S(x.cn, 1000),
+    corrected: S(x.corrected, 2000),
+    verdict: S(x.verdict, 2000),
+    suggestion: S(x.suggestion, 2000),
+    mode: S(x.mode, 20),
+    difficulty: S(x.difficulty, 40),
+    score: Math.max(0, Math.min(100, Math.round(Number(x.score) || 0))),
+    at: Number(x.at) || 0,
+  };
+}
+
+/** 历史条目规整：侧栏直接渲染 `h.head`，对象/数字都会白屏；快照词条过 sanitizeEntry */
+function cleanHistoryItem(h) {
+  if (!h || typeof h !== 'object' || !h.id) return null;
+  const id = String(h.id).slice(0, 64);
+  const entry = h.entry && typeof h.entry === 'object'
+    ? sanitizeEntry({ ...h.entry, id: String(h.entry.id || h.id).slice(0, 64), head: String(h.entry.head || h.head || '').slice(0, 200) })
+    : null;
+  const head = String(h.head || (entry && entry.head) || '').slice(0, 200);
+  if (!head) return null;
+  const base = { id, head, brief: String(h.brief || (entry && entry.brief) || '').slice(0, 600), at: Number(h.at) || 0 };
+  return entry ? { ...base, entry } : base;
+}
+
 export function loadSentences() {
   const raw = safeGet(SENTENCES_KEY, '[]');
   try {
     const list = JSON.parse(raw);
-    return Array.isArray(list) ? list.filter((x) => x && x.id && x.head && x.sentence) : [];
+    return Array.isArray(list) ? list.map(cleanSentenceItem).filter(Boolean) : [];
   } catch { return []; }
 }
 export function saveSentences(list) {
@@ -346,9 +385,10 @@ export function unionTombstones(a, b, limit = 5000) {
 export function mergeHistory(local, remote, limit = HISTORY_LIMIT) {
   const best = new Map();
   for (const h of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
-    if (!h || !h.id) continue;
-    const prev = best.get(h.id);
-    if (!prev || (Number(h.at) || 0) > (Number(prev.at) || 0)) best.set(h.id, h);
+    const clean = cleanHistoryItem(h);
+    if (!clean) continue;
+    const prev = best.get(clean.id);
+    if (!prev || (Number(clean.at) || 0) > (Number(prev.at) || 0)) best.set(clean.id, clean);
   }
   return orderHistory([...best.values()], limit, Infinity).slice(0, limit);
 }
@@ -361,9 +401,10 @@ export function mergeSentences(local, remote, deleted = [], limit = 1000) {
   const dead = new Set(Array.isArray(deleted) ? deleted : []);
   const best = new Map();
   for (const item of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
-    if (!item || !item.id || dead.has(item.id)) continue;
-    const prev = best.get(item.id);
-    if (!prev || (Number(item.score) || 0) >= (Number(prev.score) || 0)) best.set(item.id, item);
+    const clean = cleanSentenceItem(item);
+    if (!clean || dead.has(clean.id)) continue;
+    const prev = best.get(clean.id);
+    if (!prev || clean.score >= (Number(prev.score) || 0)) best.set(clean.id, clean);
   }
   return [...best.values()].sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0)).slice(0, limit);
 }

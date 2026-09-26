@@ -95,6 +95,30 @@ const mkSentence = (id, head, at) => ({ id, head, sentence: 'I like ' + head, sc
   check('applyMerged 对错句本墓碑做了同样的判断', /Array\.isArray\(merged\.deletedSentences\)/.test(src));
 }
 
+/* ---------- 4. 恶意/手改备份文件不得带进可渲染的脏值（对抗测试 R5） ---------- */
+{
+  const evilFile = {
+    books: [], days: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [],
+    sentences: [
+      { id: 's1', head: 'object', sentence: { evil: 'object-child' }, score: 88, at: 1 },
+      { id: 's2', head: 42, sentence: 'ok string', score: 'x', at: 2 },
+      { id: { deep: true }, head: 'ok', sentence: 'x', at: 3 },
+    ],
+    history: [
+      { id: 'h1', head: { boom: 'object child' }, at: 1 },
+      { id: 'h2', head: 'realword', at: 2, entry: { id: 'h2', head: 'realword', meanings: 'notarray', brief: 42 } },
+    ],
+  };
+  const empty = { books: [], sentences: [], history: [], review: {}, killed: {}, revived: {}, wrong: {}, days: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [] };
+  const merged = mergeSnapshot(empty, evilFile);
+  check('错句本：对象字段被白名单洗成字符串或整条丢弃（弹窗直接渲染 sentence）',
+    merged.sentences.every((s) => typeof s.id === 'string' && typeof s.head === 'string' && typeof s.sentence === 'string'));
+  check('错句本：分数被钳回 0-100 数字', merged.sentences.every((s) => typeof s.score === 'number' && s.score >= 0 && s.score <= 100));
+  check('历史：head 必须是字符串（侧栏直接渲染）', merged.history.every((h) => typeof h.head === 'string'));
+  check('历史：快照词条过 sanitizeEntry（meanings 回归数组）',
+    merged.history.filter((h) => h.entry).every((h) => Array.isArray(h.entry.meanings)));
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `\n❌ ${failed.length}/${results.length} 项失败` : `\n✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);
