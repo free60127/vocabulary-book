@@ -8,6 +8,7 @@
 import { mergeBooks, sanitizeBook, sanitizeEntry } from './wordbook.js';
 import { mergeFavorites } from './favorites.js';
 import { mergeDays, mergeSchedules, mergeWrong } from './review.js';
+import { putKey } from './putKey.js';
 
 export const BOOKS_KEY = 'vb-books';
 export const SCHEDULE_KEY = 'vb-schedule';
@@ -101,7 +102,7 @@ const loadStampMap = (key) => {
   const out = {};
   for (const [k, v] of Object.entries(raw)) {
     const t = Number(v);
-    if (k && Number.isFinite(t) && t > 0) out[String(k).slice(0, 200)] = t;
+    if (k && Number.isFinite(t) && t > 0) putKey(out, String(k).slice(0, 200), t);
   }
   return out;
 };
@@ -132,7 +133,7 @@ export const loadWrong = () => {
   const out = {};
   for (const [k, v] of Object.entries(raw)) {
     if (!k || !v || typeof v !== 'object') continue;
-    out[String(k).slice(0, 200)] = {
+    putKey(out, String(k).slice(0, 200), {
       head: String(v.head || k).slice(0, 200),
       brief: String(v.brief || '').slice(0, 600),
       phonetic: String(v.phonetic || '').slice(0, 120),
@@ -140,7 +141,7 @@ export const loadWrong = () => {
       reason: ['forgot', 'spell', 'reveal'].includes(v.reason) ? v.reason : 'forgot',
       at: Number(v.at) || 0,
       firstAt: Number(v.firstAt) || Number(v.at) || 0,
-    };
+    });
   }
   return out;
 };
@@ -162,7 +163,7 @@ export const loadFollowups = () => {
       .filter((x) => x && typeof x === 'object' && (x.q || x.a))
       .slice(-20)
       .map((x) => ({ q: String(x.q || '').slice(0, 500), a: String(x.a || '').slice(0, 4000), at: Number(x.at) || 0 }));
-    if (clean.length) out[id] = clean;
+    if (clean.length) putKey(out, id, clean);
   }
   return out;
 };
@@ -313,7 +314,7 @@ export function mergeStamps(a, b, limit = 3000) {
   for (const [k, v] of Object.entries(b && typeof b === 'object' ? b : {})) {
     if (!k) continue;
     const t = Number(v) || 0;
-    if (t > (Number(out[k]) || 0)) out[k] = t;
+    if (t > (Number(out[k]) || 0)) putKey(out, k, t);
   }
   const entries = Object.entries(out).sort((x, y) => Number(y[1]) - Number(x[1])).slice(0, limit);
   return Object.fromEntries(entries);

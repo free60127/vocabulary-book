@@ -178,10 +178,13 @@ export function sanitizeSnapshot(raw) {
     return { ok: false, error: `review 条目过多（上限 ${L.review}，收到 ${reviewEntries.length}）` };
   }
   const num = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : 0);
+  // 与客户端 src/putKey.js 同理：k 可能是 '__proto__'（JSON.parse 会建成自有键），
+  // 普通赋值会改掉 review 的原型而不是建键 —— defineProperty 永远建自有属性。
+  const putKey = (o, key, val) => Object.defineProperty(o, key, { value: val, enumerable: true, writable: true, configurable: true });
   const review = {};
   for (const [k, v] of reviewEntries) {
     if (!k || k.length > L.entryIdChars || !isPlainObject(v)) continue;
-    review[k] = {
+    putKey(review, k, {
       ease: Number.isFinite(Number(v.ease)) ? Math.min(5, Math.max(1.3, Number(v.ease))) : 2.5,
       interval: num(v.interval),
       due: num(v.due),
@@ -192,7 +195,7 @@ export function sanitizeSnapshot(raw) {
       // 表现为"复习进度永远同步不过去、每台设备都要从头复习"（2026-09-22 用户实测踩中）。
       lastReviewed: num(v.lastReviewed),
       lastGrade: v.lastGrade === 'forgot' || v.lastGrade === 'normal' || v.lastGrade === 'easy' ? v.lastGrade : '',
-    };
+    });
   }
 
   const data = { books, history, favorites, deletedBooks, deletedEntries, deletedFavorites, days, review };

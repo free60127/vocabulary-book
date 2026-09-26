@@ -7,6 +7,8 @@
  * 分开之后，把词条复制给同学不会连带把你的复习进度也带过去。
  */
 
+import { putKey } from './putKey.js';
+
 const DAY = 24 * 60 * 60 * 1000;
 
 export const EASE_START = 2.5;
@@ -159,10 +161,10 @@ export function mergeSchedules(local, incoming) {
     if (!id) continue;
     const inc = normalizeSchedule(raw);
     const cur = out[id] ? normalizeSchedule(out[id]) : null;
-    if (!cur) { out[id] = inc; continue; }
+    if (!cur) { putKey(out, id, inc); continue; }
     const incNewer = num(inc.lastReviewed, 0) > num(cur.lastReviewed, 0);
     const incLater = num(inc.due, 0) > num(cur.due, 0);
-    if (incNewer || (!num(cur.lastReviewed, 0) && incLater)) out[id] = inc;
+    if (incNewer || (!num(cur.lastReviewed, 0) && incLater)) putKey(out, id, inc);
   }
   return out;
 }
@@ -378,7 +380,7 @@ export function mergeWrong(a, b, limit = 2000) {
     const curCount = cur ? Math.min(999, Math.max(0, Number(cur.count) || 0)) : -1;
     const incAt = Number(raw.at) || 0;
     const curAt = cur ? Number(cur.at) || 0 : -1;
-    if (!cur || incCount > curCount || (incCount === curCount && incAt > curAt)) out[key] = { ...raw, count: incCount };
+    if (!cur || incCount > curCount || (incCount === curCount && incAt > curAt)) putKey(out, key, { ...raw, count: incCount });
   }
   const entries = Object.entries(out).sort((x, y) => (Number(y[1] && y[1].at) || 0) - (Number(x[1] && x[1].at) || 0)).slice(0, limit);
   return Object.fromEntries(entries);
