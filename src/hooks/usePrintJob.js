@@ -13,6 +13,10 @@ import React from 'react';
 export function usePrintJob() {
   const [job, setJob] = React.useState(null);
   const [hint, setHint] = React.useState(null);
+  // confirmHint 要读"此刻"的 hint：state 走 ref 镜像，不在 updater 里做副作用
+  // （updater 必须纯 —— StrictMode 下双触发，setJob 会被调两次）
+  const hintRef = React.useRef(null);
+  React.useEffect(() => { hintRef.current = hint; }, [hint]);
 
   const start = React.useCallback((next) => {
     const coarse = typeof window !== 'undefined'
@@ -39,7 +43,7 @@ export function usePrintJob() {
 
   /** 手机端说明卡上点「继续」：把待打印的任务真正交给打印流程 */
   const confirmHint = React.useCallback(() => {
-    setHint((cur) => { if (cur) setJob(cur); return null; });
+    if (hintRef.current) { setJob(hintRef.current); setHint(null); }
   }, []);
 
   return { job, hint, setHint, start, confirmHint };
