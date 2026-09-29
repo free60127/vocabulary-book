@@ -4,7 +4,7 @@
  * 这一层是"边生成边看"的地基 —— 模型不听话、网络断流、半截行，全在这里兜住。
  * 跑法：node test/stream.test.mjs
  */
-import { createSegmentReader, foldSegments, finalizeStreamEntry, SEGMENT_ORDER } from '../server/stream.mjs';
+import { createSegmentReader, foldSegments, finalizeStreamEntry, resumeCursor, SEGMENT_ORDER } from '../server/stream.mjs';
 import { foldSegments as foldClient } from '../src/streamFold.js';
 import { createLlm } from '../server/llm.mjs';
 
@@ -135,6 +135,18 @@ const SEG = {
   check('parseJsonLoose 遇到 NDJSON 返回 null（原来会抛"Unexpected non-whitespace character"）', !threw && val === null, threw ? 'throws' : String(val));
   check('parseJsonLoose 仍能解析被说明文字包住的 JSON', llm.parseJsonLoose('好的：{"a":1}').a === 1);
   check('parseJsonLoose 仍能解析带围栏的 JSON', llm.parseJsonLoose('```json\n{"a":2}\n```').a === 2);
+}
+
+/** ---------- SSE 续传游标（对抗测试 R22）----------
+ * 小数游标会算出小数起点，发送循环 i+=1 踩不到整数下标 → 漏发整段。 */
+{
+  check('无游标（首连）从 0 全量发', resumeCursor(null, undefined) === 0);
+  check('空串当没给', resumeCursor('', '') === 0);
+  check('0 是合法游标：从 1 开始（差一修复的语义保持）', resumeCursor('0', undefined) === 1);
+  check('Last-Event-ID 与 from 等价', resumeCursor(null, '2') === 3);
+  check('from 优先于 Last-Event-ID', resumeCursor('5', '2') === 6);
+  check('小数游标取整（2.7 → 从 3 开始，不漏发）', resumeCursor('2.7', undefined) === 3 && resumeCursor('0.5', undefined) === 1);
+  check('负数 / NaN / Infinity 回到全量发', resumeCursor('-1', undefined) === 0 && resumeCursor('abc', undefined) === 0 && resumeCursor('Infinity', undefined) === 0);
 }
 
 const failed = results.filter((r) => !r.ok);

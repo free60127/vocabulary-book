@@ -27,7 +27,7 @@ import { MAX_SNAPSHOT_BYTES, createSyncStore, isValidSyncCode, newSyncCode, empt
 import { createBudget, budgetMessage } from './budget.mjs';
 import { createJobStore, createJobSlots } from './jobs.mjs';
 import { createLlm } from './llm.mjs';
-import { createSegmentReader, finalizeStreamEntry, SEGMENT_LABEL } from './stream.mjs';
+import { createSegmentReader, finalizeStreamEntry, resumeCursor, SEGMENT_LABEL } from './stream.mjs';
 import { OCR_PROMPT, parseOcrText, ocrQuality } from './ocr.mjs';
 import { auditQuizQuestions } from './quizQuality.mjs';
 
@@ -1153,11 +1153,7 @@ if (!ep.visitorKey) {
          sseResume 抓到）—— 客户端按 index 覆盖去重兜住了正确性，但每次断线重连
          都白收一个重复段。没有游标（首连）才从 0 全量发。
          注意 0 是合法游标，不能靠 || 兜底：必须显式区分"没给"和"给了 0"。 */
-      const fromRaw = url0.searchParams.get('from');
-      const leiRaw = req.headers['last-event-id'];
-      const lastSeen = fromRaw !== null && fromRaw !== '' ? Number(fromRaw)
-        : (leiRaw !== undefined && leiRaw !== '' ? Number(leiRaw) : null);
-      const cursor = (lastSeen === null || !Number.isFinite(lastSeen) || lastSeen < 0) ? 0 : lastSeen + 1;
+      const cursor = resumeCursor(url0.searchParams.get('from'), req.headers['last-event-id']);
       let sendCursor = cursor;   // 轮询中随已发段数推进（保持 const 语义的初值 + 可变游标）
       let closed = false;
       req.on('close', () => { closed = true; });

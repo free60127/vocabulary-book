@@ -14,6 +14,21 @@
  */
 import { sanitizeEntry } from './resultShape.mjs';
 
+/**
+ * SSE 续传游标：from / Last-Event-ID 都表示「客户端最后见过的段 id」。
+ * 非法值（负数 / NaN / 空串 / 小数）一律回到"从头全量发"。
+ * ⚠️ 小数游标必须显式防御（对抗测试 R22）：`from=2.7` 会算出 cursor=3.7，
+ * 发送循环 i+=1 永远踩不到整数下标 —— 已完成任务的续传会漏发整段、
+ * 还夹带 undefined 段。取整（floor）而不是放行。
+ */
+export function resumeCursor(fromRaw, leiRaw) {
+  const lastSeen = fromRaw !== null && fromRaw !== undefined && fromRaw !== ''
+    ? Number(fromRaw)
+    : (leiRaw !== undefined && leiRaw !== '' ? Number(leiRaw) : null);
+  if (lastSeen === null || !Number.isFinite(lastSeen) || lastSeen < 0) return 0;
+  return Math.floor(lastSeen) + 1;
+}
+
 /** 段落顺序 = 卡片渲染顺序（前端据此自上而下长出来，不会跳） */
 export const SEGMENT_ORDER = [
   'meta', 'meanings', 'scenes', 'mnemonic', 'synonyms', 'collocations', 'examples', 'notes',
