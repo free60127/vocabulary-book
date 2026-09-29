@@ -146,6 +146,39 @@ const ids = (list) => allEntries(list).map((e) => e.id);
 }
 
 console.log('\n' + '='.repeat(62));
+/** ---------- 嵌套字段深层规整（对抗测试 R21）----------
+ * 备份/同步来的词条在客户端也要逐项重建：`{cn:{对象}}` 过了外层过滤
+ * 照样直达 EntryCard 的 {x.cn}，对象子元素一秒白屏。字段清单与服务端
+ * sanitizeSynonym/sanitizeExample 精确对齐（少一个就是同步往返丢字段）。 */
+{
+  const dirty = {
+    id: 'wb-1', head: 'object',
+    meanings: [{ cn: { o: 1 }, en: { o: 2 } }, 'notobject'],
+    synonyms: [{ word: { obj: 1 }, cn: 42, example: { e: 1 }, phonetic: [], register: { r: 1 } }],
+    examples: [{ en: { o: 1 }, cn: 42, note: [] }, 'plain'],
+    mnemonic: { parts: { o: 1 }, image: 42 },
+    avoid: { bad: 1 }, confusions: { deep: 1 }, usageNotes: { u: 1 }, examTips: [1, 2],
+  };
+  const e = sanitizeEntry(dirty);
+  check('sanitizeEntry 不崩且 head 存活', Boolean(e) && e.head === 'object');
+  check('meanings.cn 压回字符串', e.meanings[0].cn === '[object Object]' || typeof e.meanings[0].cn === 'string');
+  check('synonyms.word 压回字符串', typeof e.synonyms[0].word === 'string');
+  check('synonyms.example 压回字符串（服务端有这个字段，漏了就丢数据）', typeof e.synonyms[0].example === 'string');
+  check('examples.en 压回字符串', typeof e.examples[0].en === 'string');
+  check('mnemonic.parts/image 压回字符串', typeof e.mnemonic.parts === 'string' && typeof e.mnemonic.image === 'string');
+  check('avoid/confusions/usageNotes/examTips 全部压回字符串（EntryCard 直接渲染）',
+    typeof e.avoid === 'string' && typeof e.confusions === 'string' && typeof e.usageNotes === 'string' && typeof e.examTips === 'string');
+  // 干净数据往返无损（字段不被白名单误删）
+  const clean = sanitizeEntry({
+    id: 'wb-2', head: 'keep', avoid: '别用它骂人', level: '四六级', source: 'youdao',
+    synonyms: [{ word: 'oppose', diff: '更正式', exampleCn: '例句中文', strength: '中' }],
+    examples: [{ en: 'a sentence', cn: '一句话', note: 'note' }],
+  });
+  check('干净数据：avoid/level/source 与近义词全字段保真',
+    clean.avoid === '别用它骂人' && clean.level === '四六级' && clean.source === 'youdao'
+    && clean.synonyms[0].exampleCn === '例句中文' && clean.synonyms[0].strength === '中');
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

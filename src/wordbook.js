@@ -85,15 +85,35 @@ export function sanitizeEntry(raw) {
     phonetic: S(raw.phonetic, 120),
     pos: S(raw.pos, 120),
     brief: S(raw.brief, 600),
-    meanings: arr(raw.meanings).filter((m) => m && typeof m === 'object'),
+    // 嵌套字段**逐项重建**而不是只过滤外层（对抗测试 R21）：`{cn:{对象}}` 这类脏值
+    // 过了外层过滤后照样直达 EntryCard 的 {x.cn}，对象子元素一秒白屏。
+    meanings: arr(raw.meanings)
+      .filter((m) => m && typeof m === 'object')
+      .map((m) => ({ pos: S(m.pos, 60), cn: S(m.cn, 600), en: S(m.en, 1000), note: S(m.note, 600) })),
     register: S(raw.register, 120),
     tone: S(raw.tone, 120),
     strength: S(raw.strength, 120),
     scenes: arr(raw.scenes).filter((x) => typeof x === 'string'),
-    mnemonic: raw.mnemonic && typeof raw.mnemonic === 'object' ? raw.mnemonic : {},
-    synonyms: arr(raw.synonyms).filter((x) => x && typeof x === 'object'),
+    avoid: S(raw.avoid, 1000),
+    mnemonic: (() => {
+      const m = raw.mnemonic && typeof raw.mnemonic === 'object' ? raw.mnemonic : {};
+      return { parts: S(m.parts, 600), image: S(m.image, 1000), hook: S(m.hook, 600), family: S(m.family, 600) };
+    })(),
+    synonyms: arr(raw.synonyms)
+      .filter((x) => x && typeof x === 'object')
+      .map((x) => ({
+        word: S(x.word, 200), cn: S(x.cn, 600), diff: S(x.diff, 600), usage: S(x.usage, 600),
+        example: S(x.example, 600), exampleCn: S(x.exampleCn, 600), phonetic: S(x.phonetic, 120),
+        register: S(x.register, 60), tone: S(x.tone, 60), strength: S(x.strength, 60),
+      })),
     collocations: arr(raw.collocations).filter((x) => typeof x === 'string'),
-    examples: arr(raw.examples).filter((x) => x && typeof x === 'object'),
+    examples: arr(raw.examples)
+      .filter((x) => x && typeof x === 'object')
+      .map((x) => ({ en: S(x.en, 1000), cn: S(x.cn, 600), note: S(x.note, 600) })),
+    // 三个整段讲解字段：`...raw` 带进来的对象/数组形态必须压回字符串（<p>{x}</p> 直接渲染）
+    confusions: S(raw.confusions, 8000),
+    usageNotes: S(raw.usageNotes, 8000),
+    examTips: S(raw.examTips, 8000),
     createdAt: Number(raw.createdAt) || Date.now(),
   };
   // 注意是用 delete 而不是置 undefined：`...raw` 可能已经带进来一份脏的 dict
