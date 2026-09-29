@@ -13,7 +13,7 @@ import {
 } from '../wordbook.js';
 import {
   addStudyDay, addWrong, buildReviewQueue, buildTodayQueue, buildWrongQueue, clearWrong, dayKey,
-  headKey, mergeDays, mergeSchedules, mergeWrong, scheduleOf, sm2Review, summarizeStreak, wrongList,
+  headKey, mergeDays, mergeSchedules, scheduleOf, sm2Review, summarizeStreak, wrongList,
 } from '../review.js';
 import { addFavorite, attachEntryToFavorite, backfillFavoritesFromEntry, findFavorite, removeFavorite } from '../favorites.js';
 import { TIP_LONG_MS, TIP_NORMAL_MS } from '../constants.js';
@@ -79,10 +79,10 @@ export function useBooks({ flash }) {
     const merged = mergeStamps(loadRevived(), next);
     setRevived(merged); saveRevived(merged);
   }, []);
-  const persistWrong = useCallback((next) => {
-    const merged = mergeWrong(loadWrong(), next);
-    setWrong(merged); saveWrong(merged);
-  }, []);
+  // ⚠️ 错词本**不做合并落盘**：「答对自动出错词本」（clearWrong）是删除语义 ——
+  // 合并会把磁盘上刚写的旧值复活回来，答对了也清不出去（终验 sim 8 设备全红抓的回归）。
+  // 删除必须落定；多标签页的错词合并交给 storage 事件刷新 + 云同步。
+  const persistWrong = useCallback((next) => { setWrong(next); saveWrong(next); }, []);
   const markStudied = useCallback(() => setDays((d) => { const n = addStudyDay(d); saveDays(n); return n; }), []);
 
   /* ---------- 派生 ---------- */
