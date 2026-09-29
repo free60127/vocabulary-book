@@ -72,6 +72,29 @@ describe('大数据量渲染（对抗测试 R17）', () => {
   });
 });
 
+describe('EntryCard 畸形词条 fuzz（对抗测试 R26）', () => {
+  const dirtyEntry = (over = {}) => ({
+    id: 'wb-d', head: 'object', meanings: [{ cn: 'x' }],
+    mnemonic: { parts: 'p', image: 'i', hook: 'h', family: 'f' },
+    ...over,
+  });
+  const evils = [
+    ['meanings 混 null', { meanings: [null, { cn: 'ok' }] }],
+    ['synonyms 混非对象', { synonyms: ['str', null, { word: 'ok', cn: 'y' }] }],
+    ['examples 混字符串', { examples: ['plain', { en: 'e', cn: 'c' }] }],
+    ['mnemonic 全字段脏', { mnemonic: { parts: { o: 1 }, image: 42, hook: [], family: null } }],
+    ['dict 字段脏', { dict: { source: 1, phonetics: 'str', perPosPhonetics: [42], senses: ['x'], phrases: [{ en: { o: 1 } }] } }],
+    ['dictConflicts 脏', { dict: { phonetics: { uk: '/u/' }, senses: [{ pos: 'n', cn: 'c' }] }, dictConflicts: { phonetics: 'str', missingPos: 42 } }],
+    ['collocations 混对象', { collocations: [{}, 'ok phrase'] }],
+    ['confusions 是数组', { confusions: ['a', 'b'] }],
+  ];
+  for (const [name, over] of evils) {
+    it(`不崩：${name}`, () => {
+      expect(() => render(<EntryCard entry={dirtyEntry(over)} books={[]} existing={null} onSave={noop} onCreateBook={noop} />)).not.toThrow();
+    });
+  }
+});
+
 describe('QuizPane 畸形数据 fuzz（对抗测试 R16）', () => {
   const evils = [
     ['quiz 为 null', null],

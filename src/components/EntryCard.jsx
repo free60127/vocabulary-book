@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, Check, FileDown, LoaderCircle, MessageCircleQuestion, Plus, ShieldCheck, Star, Volume2 } from 'lucide-react';
-import { KIND_LABEL } from '../wordbook.js';
+import { KIND_LABEL, sanitizeEntry } from '../wordbook.js';
 import { speak } from '../speak.js';
 import MnemonicBlock from './MnemonicBlock.jsx';
 
@@ -90,6 +90,10 @@ export default function EntryCard({ entry, books = [], existing, onSave, onCreat
   // 用 variant 显式区分，而不是靠 @media print 去 display:none —— 那样很容易漏（漏了就是
   // PDF 里印出一排按钮），而且组件单测也测不到。
   const forPrint = variant === 'print';
+  // 纵深防御（对抗测试 R26）：所有输入路本应都过 sanitizeEntry，但历史上已两次
+  // 出现"某条路忘了"（错句本/收藏快照）—— 组件入口再过一遍白名单，脏形状到
+  // 此为止而不是白屏。解不开（缺 id/head）的极旧夹具保持原样。
+  entry = sanitizeEntry(entry) || entry;
   const m = entry.mnemonic || {};
   const dict = entry.dict || null;
   const conflicts = entry.dictConflicts || null;
