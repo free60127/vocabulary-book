@@ -99,6 +99,18 @@ function spyFetch(sink) {
     seen.push(key);
     if (cmd[0] === 'GET') return { ok: true, text: async () => JSON.stringify({ result: store.has(key) ? store.get(key) : null }) };
     if (cmd[0] === 'SET') { store.set(key, String(cmd[2])); return { ok: true, text: async () => JSON.stringify({ result: 'OK' }) }; }
+    // 迁移现在走 EVAL-CAS（R19：裸 SET 有覆盖窗口）；复刻 CAS_LUA 的判定语义。
+    // EVAL 命令形状：[EVAL, script, numkeys, key, base, docJson]
+    if (cmd[0] === 'EVAL') {
+      const k = String(cmd[3]);
+      const raw = store.get(k);
+      let curV = 0;
+      if (raw) { try { const d = JSON.parse(raw); if (d && Number.isFinite(Number(d.version))) curV = Number(d.version); } catch { curV = 0; } }
+      const base = Number(cmd[4]);
+      if (base >= 0 && curV !== base) return { ok: true, text: async () => JSON.stringify({ result: [0, raw || ''] }) };
+      store.set(k, String(cmd[5]));
+      return { ok: true, text: async () => JSON.stringify({ result: [1, ''] }) };
+    }
     return { ok: true, text: async () => JSON.stringify({ result: null }) };
   };
   const legacyDoc = JSON.stringify({ version: 7, updatedAt: 1, data: { books: [{ id: 'bk-old', name: '老数据', entries: [] }] } });
@@ -162,6 +174,58 @@ function spyFetch(sink) {
 }
 
 console.log('\n' + '='.repeat(62));
+/* ---------- 旧命名空间迁移的并发安全（对抗测试 R19）----------
+   竞态：设备 A 走 read() 的迁移路径（新键空 → 旧键命中 → 落子新键），
+   同一瞬间设备 B 完成「读旧 → 合并 → CAS 推到 v6」。
+   旧实现迁移落子是裸 SET —— A 的 v5 旧副本会盖掉 B 的 v6 新数据。
+   修复后迁移走 CAS(base=0)，落败返回新键里更新的那份。 */
+{
+  // 有状态 fake Upstash：GET/SET/EVAL（复刻 CAS_LUA 语义）
+  const kv = new Map();
+  const casLua = (key, base, docJson) => {
+    const raw = kv.get(key);
+    let cur = 0;
+    if (raw) { try { const d = JSON.parse(raw); if (d && Number.isFinite(Number(d.version))) cur = Number(d.version); } catch { cur = 0; } }
+    if (base >= 0 && cur !== base) return [0, raw || ''];
+    kv.set(key, docJson);
+    return [1, ''];
+  };
+  const realFetch = globalThis.fetch;
+  let bPushed = false;   // 「B 抢先推送」的钩子：A 的迁移 CAS 到达时先注入 B 的 v6
+  globalThis.fetch = async (url, opts) => {
+    const cmd = JSON.parse(opts.body);
+    const op = cmd[0];
+    if (op === 'GET') return { ok: true, text: async () => JSON.stringify({ result: kv.get(cmd[1]) ?? null }) };
+    if (op === 'SET' && cmd[2] === 'NX') return { ok: true, text: async () => JSON.stringify({ result: kv.has(cmd[1]) ? null : 1 }) };
+    if (op === 'SET') { kv.set(cmd[1], cmd[2]); return { ok: true, text: async () => JSON.stringify({ result: 1 }) }; }
+    if (op === 'DEL') { kv.delete(cmd[1]); return { ok: true, text: async () => JSON.stringify({ result: 1 }) }; }
+    if (op === 'EVAL') {
+      const k = String(cmd[3]);   // [EVAL, script, numkeys, key, base, docJson]
+      if (bPushed) {
+        bPushed = false;
+        kv.set(k, JSON.stringify({ version: 6, data: { from: 'deviceB' } }));   // B 抢先写入
+      }
+      const r = casLua(k, Number(cmd[4]), cmd[5]);
+      return { ok: true, text: async () => JSON.stringify({ result: r }) };
+    }
+    return { ok: true, text: async () => JSON.stringify({ result: null }) };
+  };
+  try {
+    const LEGACY_PREFIX = 'bts:sync:';
+    kv.set(LEGACY_PREFIX + 'race1', JSON.stringify({ version: 5, data: { books: [], review: {}, days: [], history: [], favorites: [], deletedBooks: [], deletedEntries: [], deletedFavorites: [] } }));
+    const store = createUpstashStore({ url: 'https://example.upstash.io', token: 't' });
+    bPushed = true;                        // A 落子前，B 的 v6 先落地
+    const got = await store.read('race1');
+    const raw = kv.get('vb:sync:race1');
+    const doc = raw ? JSON.parse(raw) : null;
+    check('迁移与设备推送竞态：B 的 v6 存活，不被 v5 旧副本覆盖', doc && doc.version === 6 && doc.data.from === 'deviceB',
+      '新键 version=' + (doc && doc.version));
+    check('read() 返回的是新键里更新的那份（v6），而不是迁移的 v5', got && got.version === 6);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(failed.length ? `❌ ${failed.length}/${results.length} 项失败` : `✅ 全部 ${results.length} 项通过`);
 process.exit(failed.length ? 1 : 0);

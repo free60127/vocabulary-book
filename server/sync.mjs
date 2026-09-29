@@ -258,7 +258,7 @@ export function createUpstashStore({ url, token, prefix, legacyPrefix }) {
   let warned = false;
   const parse = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
 
-  return {
+  const store = {
     kind: 'upstash',
     durable: true,
     get casMode() { return casMode; },
@@ -277,7 +277,12 @@ export function createUpstashStore({ url, token, prefix, legacyPrefix }) {
         console.warn('[sync] 在旧命名空间 ' + LEGACY + ' 里发现该同步码的历史数据，已迁移到 ' + NS + '（KV_PREFIX 变更的兼容处理）');
       }
       const doc = { ...older, data: clean.data };
-      await call(['SET', NS + code, JSON.stringify(doc)]);
+      // 迁移落子必须走 CAS(base=0 =「仅当新键仍不存在」)：裸 SET 有覆盖窗口 ——
+      // 另一台设备若在同一瞬间完成「读旧 → 合并 → CAS 推到 v6」，这里的 v5 旧副本
+      // 会把它静默盖掉（对抗测试 R19 的并发洞）。落败说明有人抢先写了新键，
+      // 返回新键那份更新的即可（迁移本身幂等，下个请求自然不再走这条路）。
+      const cas = await store.compareAndSwap(code, 0, doc);
+      if (!cas.ok) return cas.current && cas.current.data ? cas.current : null;
       return doc;
     },
     async write(code, doc) {
@@ -320,6 +325,7 @@ export function createUpstashStore({ url, token, prefix, legacyPrefix }) {
       return { ok: false, current: parse(await call(['GET', key])) };
     },
   };
+  return store;
 }
 
 /** 本地文件驱动：仅用于开发/自托管；托管平台上的磁盘通常是临时的。 */
