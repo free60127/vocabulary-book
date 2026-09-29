@@ -11,6 +11,8 @@ import React from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import QuizPane from '../../src/components/QuizPane.jsx';
+import BookPane from '../../src/components/BookPane.jsx';
+import { FILTERS, SORTS } from '../../src/filterSort.js';
 import EntryCard from '../../src/components/EntryCard.jsx';
 import PrintSheet from '../../src/components/PrintSheet.jsx';
 import FavoritesModal from '../../src/components/modals/FavoritesModal.jsx';
@@ -27,6 +29,47 @@ const noop = () => {};
 beforeEach(() => {
   // 组件里点朗读按钮会走 speechSynthesis，jsdom 没有实现
   window.speechSynthesis = { speak: vi.fn(), cancel: vi.fn(), getVoices: () => [] };
+});
+
+describe('大数据量渲染（对抗测试 R17）', () => {
+  it('5000 词的本子只渲染首页（分页），而不是 5000 张卡', () => {
+    // jsdom 没有 IntersectionObserver；组件的回退语义是"没有 IO 就全量渲染"。
+    // 这里 stub 一个永不相交的 IO，模拟真浏览器的分页路径。
+    class FakeIO { constructor() {} observe() {} disconnect() {} unobserve() {} }
+    const RealIO = window.IntersectionObserver;
+    window.IntersectionObserver = FakeIO;
+    try {
+    const entries = Array.from({ length: 5000 }, (_, i) => ({ id: 'wb-' + i, head: 'w' + i, brief: 'b' + i, meanings: [{ cn: 'c' + i }], createdAt: i }));
+    const { container } = render(
+      <BookPane book={{ id: 'b1', name: '大本', entries }} entries={entries} total={entries.length}
+        filters={FILTERS} sorts={SORTS} query="" setQuery={noop} kindFilter="all" setKindFilter={noop}
+        sortMode="due" setSortMode={noop} schedule={{}} onOpenEntry={noop} onDeleteEntry={noop}
+        onQuizForBook={noop} onExportPdf={noop} onRenameBook={noop} onMergeBook={noop} canMerge={false} />,
+    );
+      expect(container.textContent).toContain('5000');
+      // 分页：首屏 60 行（PAGE），绝不能把 5000 张卡一次全挂上
+      expect(container.querySelectorAll('.entry-row').length).toBe(60);
+    } finally {
+      if (RealIO) window.IntersectionObserver = RealIO; else delete window.IntersectionObserver;
+    }
+  });
+
+  it('没有 IntersectionObserver 的老浏览器：回退全量渲染不崩（语义兜底）', () => {
+    const RealIO = window.IntersectionObserver;
+    delete window.IntersectionObserver;
+    try {
+      const entries = Array.from({ length: 200 }, (_, i) => ({ id: 'w' + i, head: 'w' + i, createdAt: i }));
+      const { container } = render(
+        <BookPane book={{ id: 'b1', name: '本', entries }} entries={entries} total={200}
+          filters={FILTERS} sorts={SORTS} query="" setQuery={noop} kindFilter="all" setKindFilter={noop}
+          sortMode="due" setSortMode={noop} schedule={{}} onOpenEntry={noop} onDeleteEntry={noop}
+          onQuizForBook={noop} onExportPdf={noop} onRenameBook={noop} onMergeBook={noop} canMerge={false} />,
+      );
+      expect(container.querySelectorAll('.entry-row').length).toBe(200);
+    } finally {
+      if (RealIO) window.IntersectionObserver = RealIO;
+    }
+  });
 });
 
 describe('QuizPane 畸形数据 fuzz（对抗测试 R16）', () => {
