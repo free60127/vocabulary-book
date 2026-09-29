@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   loadBooks, loadDays, loadDeletedBooks, loadDeletedEntries, loadHistory,
   loadDeletedFavorites, loadFavorites, loadKilled, loadRevived, loadSchedule, loadWrong,
-  localSnapshot, makeHistoryItem, mergeSnapshot, pushHistory, saveBooks, saveDays,
+  localSnapshot, makeHistoryItem, mergeSnapshot, mergeStamps, pushHistory, saveBooks, saveDays,
   saveDeletedBooks, saveDeletedEntries, saveFavorites, saveDeletedFavorites, saveHistory,
   loadDeletedSentences, loadSentences, saveDeletedSentences, saveKilled, saveLastExportAt,
   saveRevived, saveSchedule, saveSentences, saveWrong,
@@ -13,7 +13,7 @@ import {
 } from '../wordbook.js';
 import {
   addStudyDay, addWrong, buildReviewQueue, buildTodayQueue, buildWrongQueue, clearWrong, dayKey,
-  headKey, scheduleOf, sm2Review, summarizeStreak, wrongList,
+  headKey, mergeDays, mergeSchedules, mergeWrong, scheduleOf, sm2Review, summarizeStreak, wrongList,
 } from '../review.js';
 import { addFavorite, attachEntryToFavorite, backfillFavoritesFromEntry, findFavorite, removeFavorite } from '../favorites.js';
 import { TIP_LONG_MS, TIP_NORMAL_MS } from '../constants.js';
@@ -50,18 +50,39 @@ export function useBooks({ flash }) {
   const persistSentences = useCallback((next) => { setSentences(next); saveSentences(next); }, []);
   const persistDeletedSentences = useCallback((next) => { setDeletedSentences(next); saveDeletedSentences(next); }, []);
 
-  /* ---------- 落盘 ---------- */
+  /* ---------- 落盘 ----------
+     高频集合（排期/错词/斩掉/复活/学习日期）落盘前先与本机存储里的最新值**按键合并**：
+     next 来自本页的内存闭包，另一个标签页可能已把更新的数据写进 localStorage ——
+     整表覆盖会把对方刚写的抹掉（两页同时复习，各丢一题的进度；对抗测试 R29）。
+     合并规则与云同步同构：排期/错词"最近更新者胜"，时间戳取大，日期取并集。
+     books/history/favorites 仍是整表写：它们的写频率低（存词/删除），且另一页的
+     storage 事件会在毫秒级把本页内存刷新，风险窗口远小于复习评分那种连发写。 */
   const persistBooks = useCallback((next) => { setBooks(next); saveBooks(next); }, []);
-  const persistSchedule = useCallback((next) => { setSchedule(next); saveSchedule(next); }, []);
+  const persistSchedule = useCallback((next) => {
+    const merged = mergeSchedules(loadSchedule(), next);
+    setSchedule(merged); saveSchedule(merged);
+  }, []);
   const persistFavorites = useCallback((next) => { setFavorites(next); saveFavorites(next); }, []);
-  const persistDays = useCallback((next) => { setDays(next); saveDays(next); }, []);
+  const persistDays = useCallback((next) => {
+    const merged = mergeDays(loadDays(), next);
+    setDays(merged); saveDays(merged);
+  }, []);
   const persistHistory = useCallback((next) => { setHistory(next); saveHistory(next); }, []);
   const persistDeletedBooks = useCallback((next) => { setDeletedBooks(next); saveDeletedBooks(next); }, []);
   const persistDeletedEntries = useCallback((next) => { setDeletedEntries(next); saveDeletedEntries(next); }, []);
   const persistDeletedFavorites = useCallback((next) => { setDeletedFavorites(next); saveDeletedFavorites(next); }, []);
-  const persistKilled = useCallback((next) => { setKilled(next); saveKilled(next); }, []);
-  const persistRevived = useCallback((next) => { setRevived(next); saveRevived(next); }, []);
-  const persistWrong = useCallback((next) => { setWrong(next); saveWrong(next); }, []);
+  const persistKilled = useCallback((next) => {
+    const merged = mergeStamps(loadKilled(), next);
+    setKilled(merged); saveKilled(merged);
+  }, []);
+  const persistRevived = useCallback((next) => {
+    const merged = mergeStamps(loadRevived(), next);
+    setRevived(merged); saveRevived(merged);
+  }, []);
+  const persistWrong = useCallback((next) => {
+    const merged = mergeWrong(loadWrong(), next);
+    setWrong(merged); saveWrong(merged);
+  }, []);
   const markStudied = useCallback(() => setDays((d) => { const n = addStudyDay(d); saveDays(n); return n; }), []);
 
   /* ---------- 派生 ---------- */

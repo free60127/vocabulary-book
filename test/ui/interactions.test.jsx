@@ -15,6 +15,7 @@ import { act, fireEvent, render, renderHook, screen } from '@testing-library/rea
 
 import ReviewPane from '../../src/components/ReviewPane.jsx';
 import { useReviewSession } from '../../src/hooks/useReviewSession.js';
+import { useBooks } from '../../src/hooks/useBooks.js';
 import ReviewSetup from '../../src/components/ReviewSetup.jsx';
 import SentencePane from '../../src/components/SentencePane.jsx';
 import QuizPane from '../../src/components/QuizPane.jsx';
@@ -191,6 +192,20 @@ describe('ReviewPane 复习卡', () => {
     modal.unmount();
     fireEvent.keyDown(document, { key: ' ' });
     expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('useBooks：另一标签页写过的排期不会被本页评分覆盖（合并落盘，对抗测试 R29）', () => {
+    // 模拟"另一个标签页"刚把 w1 的进度写进 localStorage，本页还没收到 storage 事件
+    localStorage.setItem('vb-schedule', JSON.stringify({
+      w1: { ease: 2.5, interval: 3, due: Date.now() + 86400000, reps: 1, lapses: 0, lastReviewed: 500, lastGrade: 'normal' },
+    }));
+    const { result } = renderHook(() => useBooks({ flash: () => {} }));
+    act(() => { result.current.gradeEntry({ key: 'w2', entry: { id: 'w2', createdAt: 1 } }, 'easy'); });
+    expect(result.current.schedule.w1 && result.current.schedule.w1.lastReviewed === 500).toBe(true);
+    expect(result.current.schedule.w2 && result.current.schedule.w2.lastGrade === 'easy').toBe(true);
+    const disk = JSON.parse(localStorage.getItem('vb-schedule') || '{}');
+    expect(Boolean(disk.w1 && disk.w2)).toBe(true);   // 磁盘上两页的进度都在
+    localStorage.clear();
   });
 
   it('自测题：选项可点、未作答时禁用批改、批改后显示判定与反馈', () => {
