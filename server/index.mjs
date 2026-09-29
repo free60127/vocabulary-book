@@ -615,7 +615,9 @@ class HttpError extends Error {
 }
 function json(res, code, obj) {
   const body = JSON.stringify(obj ?? {});
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  // API 响应一律 no-store：同步快照（全部词条+进度）、批改结果、账号信息都是
+  // 按请求动态出的内容，不能落进浏览器或共享代理的缓存（对抗测试 R13）
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(body);
 }
 /** 读请求体；超限时先把剩余数据排空再回 413，避免连接状态错乱 */
