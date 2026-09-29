@@ -19,6 +19,21 @@ import { POLL_LOOKUP_MS, TIMEOUT_LOOKUP_MS, POLL_MAX_FAILURES } from '../constan
  */
 const MAX_EDGE = 1600;
 const JPEG_QUALITY = 0.82;
+/** 拒收阈值：再大的图压缩也不会更清楚（解码只吃内存），引导用户截小一点 */
+export const MAX_FILE_BYTES = 30 * 1024 * 1024;
+
+/** 选图守卫（纯函数，便于测试）：返回人话错误，通过返回 '' */
+export function checkImageFile(file) {
+  if (!file) return '没有拿到图片';
+  if (file.size > MAX_FILE_BYTES) {
+    return `图片太大了（约 ${Math.round(file.size / 1024 / 1024)}MB）—— 先在相册里裁一下或用「截图」再试`;
+  }
+  // 空 type 放行：部分安卓 WebView 的拍照结果不带 MIME，图片本身多半是好的
+  if (file.type && !file.type.startsWith('image/')) {
+    return '请选择图片文件（JPG / PNG / WebP 都可以）';
+  }
+  return '';
+}
 
 /** 把 File/Blob 压成 dataURL（长边 ≤ MAX_EDGE） */
 export function compressImage(file, { maxEdge = MAX_EDGE, quality = JPEG_QUALITY } = {}) {
@@ -68,6 +83,9 @@ export function useImageImport({ settings, aliveRef, books, onImport, flash }) {
   /** 选好图 / 拍好照 → 压缩 → 上传识别 */
   const recognize = useCallback(async (file) => {
     if (!file) return;
+    // 先把明显不对的挡在解码之前：50MB 原图在手机上解码就能把标签页顶死
+    const bad = checkImageFile(file);
+    if (bad) { setError(bad); setPhase('pick'); return; }
     lastFileRef.current = file;
     setError(''); setPhase('working'); setProgress('正在压缩图片…');
     try {

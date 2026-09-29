@@ -7,6 +7,7 @@
  * 跑法：node test/ocr.test.mjs
  */
 import { parseOcrText, ocrQuality, OCR_PROMPT } from '../server/ocr.mjs';
+import { checkImageFile, MAX_FILE_BYTES } from '../src/hooks/useImageImport.js';
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -96,6 +97,15 @@ const check = (name, ok, detail = '') => {
     /左栏从上到下/.test(OCR_PROMPT) && /右栏从上到下/.test(OCR_PROMPT));
   check('提示词要求涂改以最终写法为准', /涂改以最终写法为准/.test(OCR_PROMPT));
   check('提示词要求编号连续、不许跳行', /不要跳过|不跳过/.test(OCR_PROMPT));
+}
+
+/** 选图守卫（对抗测试 R14）：大图/非图片在解码前拦下 */
+{
+  check('正常图片放行', checkImageFile({ size: 3 * 1024 * 1024, type: 'image/jpeg' }) === '');
+  check('空 type 放行（部分安卓 WebView 拍照不带 MIME）', checkImageFile({ size: 1024, type: '' }) === '');
+  check('超阈值大图拦下并报 MB 数', /30MB|太大/.test(checkImageFile({ size: MAX_FILE_BYTES + 1, type: 'image/jpeg' })));
+  check('非图片文件拦下', /图片文件/.test(checkImageFile({ size: 1024, type: 'application/pdf' })));
+  check('空文件对象拦下', checkImageFile(null) !== '');
 }
 
 const failed = results.filter((r) => !r.ok);
