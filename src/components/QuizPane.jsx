@@ -26,7 +26,21 @@ export default function QuizPane({
    *     前者是批改结果，后者是整卷答案）。
    */
   const [showFeedback, setShowFeedback] = useState(true);
-  const questions = (quiz && quiz.questions) || [];
+  /**
+   * 客户端纵深防御：服务端有 sanitizeQuiz，但本组件还会拿到旧版服务端缓存的
+   * 任务数据 —— 任何一层失守，null 题目/对象选项/对象标题都会在渲染期白屏
+   * （对抗测试 R16 实锤 3 个崩溃）。这里按"形状不可信"再规整一次。
+   */
+  const questions = ((quiz && Array.isArray(quiz.questions)) ? quiz.questions : [])
+    .filter((q) => q && typeof q === 'object')
+    .map((q) => ({
+      ...q,
+      type: typeof q.type === 'string' ? q.type : '',
+      stem: typeof q.stem === 'string' ? q.stem : '',
+      options: (Array.isArray(q.options) ? q.options : []).filter((o) => typeof o === 'string'),
+      answer: typeof q.answer === 'string' ? q.answer : String(q.answer == null ? '' : q.answer),
+    }));
+  const title = (quiz && typeof quiz.title === 'string' && quiz.title) || '自测题';
   const resultOf = (i) => (graded ? (graded.results || []).find((r) => r.index === i) : null);
   const answeredCount = questions.filter((q, i) => {
     const a = answers[i] || {};
@@ -64,7 +78,7 @@ export default function QuizPane({
       <article className="sheet">
         <header className="sheet-title">
           <span className="eyebrow">SELF QUIZ · 单词本自测</span>
-          <h1>{(quiz && quiz.title) || '自测题'}</h1>
+          <h1>{title}</h1>
           <p className="muted small">
             {questions.length} 题 · 选择点选项、其余直接输入，做完点右上「批改」
           </p>

@@ -29,6 +29,27 @@ beforeEach(() => {
   window.speechSynthesis = { speak: vi.fn(), cancel: vi.fn(), getVoices: () => [] };
 });
 
+describe('QuizPane 畸形数据 fuzz（对抗测试 R16）', () => {
+  const evils = [
+    ['quiz 为 null', null],
+    ['quiz 为空对象', {}],
+    ['questions 为 null', { title: 'x', questions: null }],
+    ['question 为 null', { title: 'x', questions: [null] }],
+    ['question 空对象', { title: 'x', questions: [{}] }],
+    ['options 是字符串', { title: 'x', questions: [{ type: 'choice', stem: 's', options: 'notarray', answer: 0 }] }],
+    ['answer 越界', { title: 'x', questions: [{ type: 'choice', stem: 's', options: ['a'], answer: 99 }] }],
+    ['translate 无答案', { title: 'x', questions: [{ type: 'translate', stem: 's', options: [], answer: '' }] }],
+    ['未知题型', { title: 'x', questions: [{ type: 'weird', stem: 's', options: [], answer: 'x' }] }],
+    ['选项是对象', { title: 'x', questions: [{ type: 'choice', stem: 's', options: [{ obj: 1 }], answer: 0 }] }],
+    ['title 是对象', { title: { obj: 1 }, questions: [] }],
+  ];
+  for (const [name, quiz] of evils) {
+    it(`不崩：${name}`, () => {
+      expect(() => render(<QuizPane quiz={quiz} showAnswers busy={false} onToggleAnswers={noop} onCopy={noop} onRegenerate={noop} onExit={noop} />)).not.toThrow();
+    });
+  }
+});
+
 describe('QuizPane 自测题', () => {
   it('渲染题目、选项与题号', () => {
     render(<QuizPane quiz={QUIZ} showAnswers={false} busy={false} onToggleAnswers={noop} onCopy={noop} onRegenerate={noop} onExit={noop} />);
