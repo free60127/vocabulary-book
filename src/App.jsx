@@ -30,6 +30,7 @@ import BookPane from './components/BookPane.jsx'
 import ReviewPane from './components/ReviewPane.jsx'
 import BackupModal from './components/modals/BackupModal.jsx'
 import AuthModal from './components/modals/AuthModal.jsx'
+import { openableEntry } from './favorites.js'
 import FavoritesModal from './components/modals/FavoritesModal.jsx'
 import SettingsModal from './components/modals/SettingsModal.jsx'
 import QuizSetupModal from './components/modals/QuizSetupModal.jsx'
@@ -602,8 +603,10 @@ export default function App() {
     if (!fav) return
     setFavOpen(false)
     closeSidebarOnMobile()
-    if (fav.entry) {
-      setEntry(fav.entry); setQuery(fav.head); setView('search'); setError('')
+    // 快照过一遍 sanitizeEntry：脏快照（手改备份/同步坏数据）不拦就会白屏词条卡
+    const clean = openableEntry(fav)
+    if (clean) {
+      setEntry(clean); setQuery(fav.head); setView('search'); setError('')
       return
     }
     setQuery(fav.head)

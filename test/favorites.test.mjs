@@ -11,7 +11,7 @@
  */
 import {
   addFavorite, attachEntryToFavorite, backfillFavoritesFromEntry, favoriteId, findFavorite, loadFavorites,
-  mergeFavorites, removeFavorite, sanitizeFavorite,
+  mergeFavorites, openableEntry, removeFavorite, sanitizeFavorite,
 } from '../src/favorites.js';
 
 const results = [];
@@ -160,6 +160,16 @@ console.log('\n' + '='.repeat(62));
   // 卡片里本来就没有可补的 → 不能谎报成功
   const r3 = backfillFavoritesFromEntry([sanitizeFavorite({ head: 'grudge' })], { head: 'grudge', synonyms: [], examples: [] });
   check('没东西可补时 fields 为空、changed=false（不谎报）', r3.changed === false && r3.fields.length === 0, JSON.stringify(r3));
+}
+
+/* ---------- 打开收藏：挂载快照必须过 sanitizeEntry（对抗测试 R10）---------- */
+{
+  check('脏快照（meanings 为字符串）拦下返回 null', openableEntry({ head: 'x', entry: { head: 'x', meanings: 'notarray' } }) === null);
+  const ok = openableEntry({ head: 'x', entry: { id: 'wb-1', head: 'x', meanings: [{ cn: '好' }] } });
+  check('合法快照放行且 meanings 仍为数组', Boolean(ok) && Array.isArray(ok.meanings));
+  check('快照缺 head 时用收藏词头兜底', openableEntry({ head: 'grudge', entry: { id: 'wb-2', meanings: [] } }).head === 'grudge');
+  check('没挂快照返回 null（调用方退回重查）', openableEntry({ head: 'y' }) === null);
+  check('快照缺 id 返回 null（fabricate id 会污染排期键）', openableEntry({ head: 'z', entry: { head: 'z', meanings: [] } }) === null);
 }
 
 const failed = results.filter((r) => !r.ok);

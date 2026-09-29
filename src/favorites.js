@@ -10,6 +10,17 @@
  *
  * 与其它数据一致：删除留墓碑（云同步是并集合并，不留墓碑就会"删了又出现"）。
  */
+import { sanitizeEntry } from './wordbook.js';
+
+/** 挂载词条的快照来自备份/云同步（不可信），打开前必须过 sanitizeEntry ——
+ *  否则一条 meanings 为字符串的脏快照就能让词条卡白屏（对抗测试 R10）。
+ *  快照缺 id/解不开时返回 null，调用方退回"重新查一次"。 */
+export function openableEntry(fav) {
+  if (!fav || typeof fav !== 'object') return null;
+  const raw = fav.entry;
+  if (!raw || typeof raw !== 'object') return null;
+  return sanitizeEntry({ ...raw, id: String(raw.id || '').trim(), head: String(raw.head || fav.head || '').trim() });
+}
 
 /** 收藏项的稳定 id：按词头归一化，同一个词不会因为从不同词条收藏而出现两条 */
 export const favoriteId = (head) => 'fav-' + String(head || '').trim().toLowerCase().replace(/\s+/g, '-').slice(0, 50);
